@@ -1,0 +1,197 @@
+import os
+import json
+import urllib.parse
+from datetime import datetime
+import pytz
+import requests
+import yfinance as yf
+import numpy as np
+from scipy.stats import norm
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.calibration import CalibratedClassifierCV
+
+# ==============================================================================
+# 1. CONFIGURACIÓN GRATUITA EN LÍNEA Y MODO REUNIÓN
+# ==============================================================================
+WHATSAPP_TELEFONO = os.getenv("WHATSAPP_TELEFONO")
+CALLMEBOT_APIKEY = os.getenv("CALLMEBOT_APIKEY")
+URL_DASHBOARD = os.getenv("URL_DASHBOARD", "https://mi-analisis-bolsa.streamlit.app")
+
+WATCHLIST = ["NU", "AAPL", "NVDA", "AMD", "PLTR", "SOFI", "SPY"]
+UMBRAL_CONFIANZA = 0.97          # Margen de error <= 3%
+PRESUPUESTO_MAX_CONTRATO = 300.0 # Tope máximo por contrato en USD
+ARCHIVO_MEMORIA_DIA = "alertas_enviadas_hoy.json"
+
+# ==============================================================================
+# 2. CONTROL ANTI-SPAM (NO INTERRUMPIR VARIAS VECES POR LA MISMA ACCIÓN)
+# ==============================================================================
+def ya_fue_alertado_hoy(ticker):
+    hoy_str = datetime.now().strftime("%Y-%m-%d")
+    if not os.path.exists(ARCHIVO_MEMORIA_DIA):
+        return False
+    with open(ARCHIVO_MEMORIA_DIA, "r") as f:
+        datos = json.load(f)
+    return ticker in datos.get(hoy_str, [])
+
+def marcar_como_alertado(ticker):
+    hoy_str = datetime.now().strftime("%Y-%m-%d")
+    datos = {}
+    if os.path.exists(ARCHIVO_MEMORIA_DIA):
+        with open(ARCHIVO_MEMORIA_DIA, "r") as f:
+            datos = json.load(f)
+    if hoy_str not in datos:
+        datos = {hoy_str: []}  # Limpia días anteriores
+    if ticker not in datos[hoy_str]:
+        datos[hoy_str].append(ticker)
+    with open(ARCHIVO_MEMORIA_DIA, "w") as f:
+        json.dump(datos, f)
+
+# ==============================================================================
+# 3. CÁLCULO DE GRIEGAS Y SIMULACIÓN DE 500 FUTUROS
+# ==============================================================================
+def calcular_griegas(S, K, T, sigma, tipo="call", r=0.045):
+    if T <= 0 or sigma <= 0:
+        return {"delta": 0, "theta": 0}
+    d1 = (np.log(S / K) + (r + 0.5 * sigma ** 2) * T) / (sigma * np.sqrt(T))
+    d2 = d1 - sigma * np.sqrt(T)
+    if tipo == "call":
+        delta = norm.cdf(d1)
+        theta = (-(S * norm.pdf(d1) * sigma) / (2 * np.sqrt(T)) - r * K * np.exp(-r * T) * norm.cdf(d2)) / 365
+    else:
+        delta = norm.cdf(d1) - 1
+        theta = (-(S * norm.pdf(d1) * sigma) / (2 * np.sqrt(T)) + r * K * np.exp(-r * T) * norm.cdf(-d2)) / 365
+    return {"delta": round(delta, 3), "theta": round(theta, 3)}
+
+def simular_500_escenarios(precios_hist, dias_proy=15):
+    retornos = np.log(precios_hist / precios_hist.shift(1)).dropna()
+    media, vol = retornos.mean(), retornos.std()
+    ultimo = float(precios_hist.iloc[-1])
+    np.random.seed(42)
+    caminos = np.zeros((dias_proy, 500))
+    caminos[0] = ultimo
+    for t in range(1, dias_proy):
+        caminos[t] = caminos[t - 1] * np.exp((media - 0.5 * vol ** 2) + vol * np.random.normal(0, 1, 500))
+    return round(np.median(caminos[-1]), 2)
+
+def enviar_whatsapp_prioritario(mensaje):
+    if not WHATSAPP_TELEFONO or not CALLMEBOT_APIKEY:
+        print("Faltan credenciales de WhatsApp.")
+        return
+    texto = urllib.parse.quote(mensaje)
+    url = f"https://api.callmebot.com/whatsapp.php?phone={WHATSAPP_TELEFONO}&text={texto}&apikey={CALLMEBOT_APIKEY}"
+    requests.get(url, timeout=15)
+
+# ==============================================================================
+# 4. MONITOREO EN LÍNEA INTRA-DÍA
+# ==============================================================================
+def vigilar_mercado_en_vivo():
+    zona_ny = pytz.timezone("America/New_York")
+    ahora_ny = datetime.now(zona_ny)
+    
+    # Verificar que la bolsa esté abierta (9:30 AM a 4:00 PM EST)
+    hora_decimal = ahora_ny.hour + ahora_ny.minute / 60.0
+    if ahora_ny.weekday() >= 5 or not (9.5 <= hora_decimal <= 16.0):
+        print(f"[{ahora_ny.strftime('%H:%M')} EST] Mercado cerrado. Vigilante en reposo.")
+        return
+
+    print(f"[{ahora_ny.strftime('%H:%M')} EST] Escaneando mercado en línea...")
+
+    for ticker in WATCHLIST:
+        if ya_fue_alertado_hoy(ticker):
+            continue
+
+        try:
+            activo = yf.Ticker(ticker)
+            # Historial diario para entrenar el modelo
+            df = activo.history(period="2y", interval="1d")
+            # Precio en línea actual (última vela de 1 minuto)
+            intradia = activo.history(period="1d", interval="1m")
+            if df.empty or intradia.empty:
+                continue
+
+            precio_vivo = float(intradia['Close'].iloc[-1])
+            df.iloc[-1, df.columns.get_loc('Close')] = precio_vivo  # Actualiza el cierre de hoy con el precio en vivo
+
+            df['Ret_1d'] = df['Close'].pct_change()
+            df['EMA_21'] = df['Close'].ewm(span=21, adjust=False).mean()
+            df['Dist_EMA21'] = (df['Close'] - df['EMA_21']) / df['EMA_21']
+            delta = df['Close'].diff()
+            gain = (delta.where(delta > 0, 0)).rolling(14).mean()
+            loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
+            df['RSI'] = 100 - (100 / (1 + (gain / loss)))
+            df['Vol_20d'] = df['Ret_1d'].rolling(20).std()
+            df['Vol_Rel'] = df['Volume'] / df['Volume'].rolling(20).mean()
+            df['Target'] = (df['Close'].shift(-5) / df['Close'] - 1 >= 0.02).astype(int)
+
+            features = ['Ret_1d', 'Dist_EMA21', 'RSI', 'Vol_20d', 'Vol_Rel']
+            df_clean = df.dropna().copy()
+            corte = int(len(df_clean) * 0.8)
+
+            modelo = CalibratedClassifierCV(RandomForestClassifier(n_estimators=200, max_depth=5, random_state=42), method='isotonic', cv=3)
+            modelo.fit(df_clean[features].iloc[:corte], df_clean['Target'].iloc[:corte])
+
+            prob_call = modelo.predict_proba(df[features].iloc[[-1]].dropna())[:, 1][0]
+            prob_put = 1.0 - prob_call
+
+            direccion, tipo_op, prob_final = None, None, 0
+            if prob_call >= UMBRAL_CONFIANZA:
+                direccion, tipo_op, prob_final = "🟢 CALL", "call", prob_call
+            elif prob_put >= UMBRAL_CONFIANZA:
+                direccion, tipo_op, prob_final = "🔴 PUT", "put", prob_put
+
+            if direccion:
+                hoy = datetime.now()
+                venc_elegido, dias_venc = None, 30
+                for v in activo.options:
+                    d = (datetime.strptime(v, "%Y-%m-%d") - hoy).days
+                    if 21 <= d <= 45:
+                        venc_elegido, dias_venc = v, d
+                        break
+
+                if not venc_elegido:
+                    continue
+
+                cadena = activo.option_chain(venc_elegido).calls if tipo_op == "call" else activo.option_chain(venc_elegido).puts
+                T = dias_venc / 365.0
+                mejor_op, mejor_score = None, -999
+
+                for _, row in cadena.iterrows():
+                    if row['openInterest'] < 150 or row['ask'] <= 0 or row['bid'] <= 0:
+                        continue
+                    mid = round((row['bid'] + row['ask']) / 2, 2)
+                    if mid * 100 > PRESUPUESTO_MAX_CONTRATO:
+                        continue
+                    g = calcular_griegas(precio_vivo, row['strike'], T, row['impliedVolatility'], tipo=tipo_op)
+                    if 0.40 <= abs(g['delta']) <= 0.65:
+                        score = (abs(g['delta']) * 100) - (abs(g['theta']) * 50)
+                        if score > mejor_score:
+                            mejor_score = score
+                            mejor_op = {
+                                "simbolo": row['contractSymbol'], "strike": row['strike'],
+                                "vencimiento": venc_elegido, "mid": mid, "costo": round(mid * 100, 0),
+                                "delta": g['delta'], "theta": g['theta']
+                            }
+
+                if mejor_op:
+                    objetivo_500 = simular_500_escenarios(df['Close'], dias_proy=dias_venc)
+                    tp = round(mejor_op['mid'] * 1.60, 2)
+                    sl = round(mejor_op['mid'] * 0.70, 2)
+
+                    # Mensaje ultra-ejecutivo diseñado para leer en 3 segundos durante una reunión
+                    msg = (
+                        f"⚡ *OPORTUNIDAD EN VIVO: {ticker}* ({direccion})\n"
+                        f"🎯 *Probabilidad:* {prob_final*100:.1f}% | *Meta 500 sims:* ${objetivo_500}\n"
+                        f"📑 *Contrato:* `{mejor_op['simbolo']}`\n"
+                        f"💵 *Entrada:* *${mejor_op['mid']}* (${mejor_op['costo']} USD) | *Δ:* {mejor_op['delta']}\n"
+                        f"🛡️ *TP:* ${tp} | *SL:* ${sl}\n"
+                        f"📊 *Gráfico en iPad/Celular:* {URL_DASHBOARD}"
+                    )
+                    enviar_whatsapp_prioritario(msg)
+                    marcar_como_alertado(ticker)
+                    print(f"--> Alerta enviada para {ticker}.")
+
+        except Exception as e:
+            print(f"Error en {ticker}: {e}")
+
+if __name__ == "__main__":
+    vigilar_mercado_en_vivo()
