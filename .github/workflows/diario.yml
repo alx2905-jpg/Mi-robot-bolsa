@@ -1,0 +1,22 @@
+name: Vigilancia Continua en Vivo
+
+on:
+  schedule:
+    # Revisa cada 15 minutos durante el horario de bolsa (14:00 a 21:00 UTC) de Lunes a Viernes
+    - cron: '*/15 14-21 * * 1-5'
+  workflow_dispatch:
+
+jobs:
+  vigilar-mercado:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install -r requirements.txt
+      - env:
+          WHATSAPP_TELEFONO: ${{ secrets.WHATSAPP_TELEFONO }}
+          CALLMEBOT_APIKEY: ${{ secrets.CALLMEBOT_APIKEY }}
+          URL_DASHBOARD: ${{ secrets.URL_DASHBOARD }}
+        run: python vigia_en_vivo.py
