@@ -21,26 +21,18 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-st.markdown(
-    "<style>"
-    ".stApp { background-color: #060b12; color: #b8d0e8;"
-    " font-family: 'Courier New', monospace; }"
-    "div[data-testid='stMetric'] { background-color: #0b1220;"
-    " border: 1px solid #162236; padding: 8px 12px; border-radius: 6px; }"
-    "div[data-testid='stMetricLabel'] { color: #5c7c99 !important;"
-    " font-size: 11px !important; }"
-    "div[data-testid='stMetricValue'] { color: #e8f4ff !important;"
-    " font-size: 18px !important; }"
-    ".stTabs [data-baseweb='tab-list'] { background-color: #0b1220;"
-    " border-bottom: 1px solid #162236; gap: 6px; flex-wrap: wrap; }"
-    ".stTabs [data-baseweb='tab'] { color: #8ab8d8;"
-    " font-family: 'Courier New', monospace; padding: 8px 14px; }"
-    ".stTabs [aria-selected='true'] { color: #00c8ff !important;"
-    " border-bottom: 2px solid #00c8ff !important;"
-    " background-color: #0e1828 !important; }"
-    "</style>",
-    unsafe_allow_html=True
-)
+css_app = [
+    "<style>",
+    ".stApp { background-color: #060b12; color: #b8d0e8; font-family: 'Courier New', monospace; }",
+    "div[data-testid='stMetric'] { background-color: #0b1220; border: 1px solid #162236; padding: 8px 12px; border-radius: 6px; }",
+    "div[data-testid='stMetricLabel'] { color: #5c7c99 !important; font-size: 11px !important; }",
+    "div[data-testid='stMetricValue'] { color: #e8f4ff !important; font-size: 18px !important; }",
+    ".stTabs [data-baseweb='tab-list'] { background-color: #0b1220; border-bottom: 1px solid #162236; gap: 6px; flex-wrap: wrap; }",
+    ".stTabs [data-baseweb='tab'] { color: #8ab8d8; font-family: 'Courier New', monospace; padding: 8px 14px; }",
+    ".stTabs [aria-selected='true'] { color: #00c8ff !important; border-bottom: 2px solid #00c8ff !important; background-color: #0e1828 !important; }",
+    "</style>"
+]
+st.markdown("".join(css_app), unsafe_allow_html=True)
 
 if "posiciones_ibkr" not in st.session_state:
     st.session_state.posiciones_ibkr = [
@@ -59,28 +51,18 @@ if "posiciones_ibkr" not in st.session_state:
 col_logo, col_status = st.columns([4, 1])
 with col_logo:
     st.title("⚡ OPTIONBOT PRO • IBKR & QUANT ENGINE")
-    st.caption(
-        "TradingView Avanzado • Monte Carlo Histórico + Top 5 Opciones"
-        " • Informe Corporativo 24/7"
-    )
+    st.caption("TradingView Avanzado • Monte Carlo Histórico + Top 5 Opciones • Informe Corporativo 24/7")
 with col_status:
     bot_activo = st.toggle("🟢 BOT MONITOR", value=True)
 
 st.sidebar.header("⚙️ Control de Activo")
-ticker = st.sidebar.text_input(
-    "Buscar Ticker (ej. NU, DIS, TSLA, SPY, MELI):", value="NU"
-).strip().upper()
+ticker = st.sidebar.text_input("Buscar Ticker (ej. NU, DIS, TSLA, SPY, MELI):", value="NU").strip().upper()
 if not ticker:
     ticker = "NU"
 
 intervalo = st.sidebar.selectbox("Temporalidad:", ["1d", "1h", "15m", "5m"], index=0)
-presupuesto_max = st.sidebar.number_input(
-    "Presupuesto Máx. Contrato (USD):",
-    min_value=50, max_value=10000, value=300, step=50
-)
-umbral_confianza = st.sidebar.slider(
-    "Confianza Mínima IA (%):", min_value=50, max_value=99, value=97
-)
+presupuesto_max = st.sidebar.number_input("Presupuesto Máx. Contrato (USD):", min_value=50, max_value=10000, value=300, step=50)
+umbral_confianza = st.sidebar.slider("Confianza Mínima IA (%):", min_value=50, max_value=99, value=97)
 
 # ==============================================================================
 # 2. PALETAS CORPORATIVAS POR TICKER Y UTILIDADES
@@ -211,10 +193,7 @@ def cargar_datos_y_modelo(symbol, inter):
 
     df_diario["Ret_1d"] = df_diario["Close"].pct_change()
     df_diario["EMA_21"] = df_diario["Close"].ewm(span=21, adjust=False).mean()
-    df_diario["Dist_EMA21"] = (
-        (df_diario["Close"] - df_diario["EMA_21"])
-        / df_diario["EMA_21"].replace(0, np.nan)
-    )
+    df_diario["Dist_EMA21"] = (df_diario["Close"] - df_diario["EMA_21"]) / df_diario["EMA_21"].replace(0, np.nan)
 
     delta = df_diario["Close"].diff()
     gain = (delta.where(delta > 0, 0.0)).rolling(14).mean()
@@ -223,33 +202,19 @@ def cargar_datos_y_modelo(symbol, inter):
     df_diario["Vol_20d"] = df_diario["Ret_1d"].rolling(20).std()
     vol_mean = df_diario["Volume"].rolling(20).mean().replace(0, np.nan)
     df_diario["Vol_Rel"] = (df_diario["Volume"] / vol_mean).fillna(1.0)
-    df_diario["Target"] = (
-        df_diario["Close"].shift(-5) / df_diario["Close"] - 1.0 >= 0.02
-    ).astype(int)
+    df_diario["Target"] = (df_diario["Close"].shift(-5) / df_diario["Close"] - 1.0 >= 0.02).astype(int)
 
     features = ["Ret_1d", "Dist_EMA21", "RSI", "Vol_20d", "Vol_Rel"]
-    df_feat = (
-        df_diario[features]
-        .replace([np.inf, -np.inf], np.nan)
-        .ffill()
-        .bfill()
-        .fillna(0.0)
-    )
+    df_feat = df_diario[features].replace([np.inf, -np.inf], np.nan).ffill().bfill().fillna(0.0)
     df_clean = df_feat.copy()
     df_clean["Target"] = df_diario["Target"]
     df_clean = df_clean.iloc[:-5].dropna()
 
     corte = int(len(df_clean) * 0.8)
     y_train = df_clean["Target"].iloc[:corte]
-    if (
-        len(df_clean) >= 35
-        and y_train.nunique() > 1
-        and int(y_train.value_counts().min()) >= 3
-    ):
+    if len(df_clean) >= 35 and y_train.nunique() > 1 and int(y_train.value_counts().min()) >= 3:
         try:
-            rf = RandomForestClassifier(
-                n_estimators=200, max_depth=5, random_state=42
-            )
+            rf = RandomForestClassifier(n_estimators=200, max_depth=5, random_state=42)
             modelo = CalibratedClassifierCV(rf, method="isotonic", cv=3)
             modelo.fit(df_clean[features].iloc[:corte], y_train)
             prob_call = float(modelo.predict_proba(df_feat.iloc[[-1]])[:, 1][0])
@@ -259,9 +224,7 @@ def cargar_datos_y_modelo(symbol, inter):
         prob_call = float(y_train.mean()) if len(y_train) > 0 else 0.50
 
     periodo_velas = "6mo" if inter == "1d" else "1mo" if inter == "1h" else "5d"
-    df_velas = _normalizar_ohlcv(
-        activo.history(period=periodo_velas, interval=inter)
-    ).tail(80)
+    df_velas = _normalizar_ohlcv(activo.history(period=periodo_velas, interval=inter)).tail(80)
     if df_velas.empty:
         df_velas = df_diario.tail(80).copy()
 
@@ -292,28 +255,13 @@ def cargar_datos_y_modelo(symbol, inter):
         raw_news = activo.news or []
         for n in raw_news[:3]:
             c = n.get("content", n) if isinstance(n, dict) else {}
-            titulo = html.escape(
-                str(c.get("title") or f"Actualización de mercado {symbol}")
-            )
-            resumen = html.escape(
-                str(c.get("summary") or c.get("description") or "Reporte reciente.")
-            )
+            titulo = html.escape(str(c.get("title") or f"Actualización de mercado {symbol}"))
+            resumen = html.escape(str(c.get("summary") or c.get("description") or "Reporte reciente."))
             prov_obj = c.get("provider")
-            prov = html.escape(
-                str(prov_obj.get("displayName") if isinstance(prov_obj, dict) else "Mercado")
-            )
+            prov = html.escape(str(prov_obj.get("displayName") if isinstance(prov_obj, dict) else "Mercado"))
             link_obj = c.get("canonicalUrl") or c.get("clickThroughUrl")
-            url = (
-                link_obj.get("url")
-                if isinstance(link_obj, dict)
-                else f"https://finance.yahoo.com/quote/{symbol}"
-            )
-            noticias_limpias.append({
-                "titulo": titulo,
-                "resumen": resumen[:220],
-                "prov": prov,
-                "url": url
-            })
+            url = link_obj.get("url") if isinstance(link_obj, dict) else f"https://finance.yahoo.com/quote/{symbol}"
+            noticias_limpias.append({"titulo": titulo, "resumen": resumen[:220], "prov": prov, "url": url})
     except Exception:
         noticias_limpias = []
 
@@ -325,9 +273,7 @@ def cargar_datos_y_modelo(symbol, inter):
                 shares_val = _safe_float(row.get("Shares"), -1)
                 insiders_limpios.append({
                     "nombre": html.escape(str(row.get("Insider", "Directivo"))),
-                    "trans": html.escape(
-                        str(row.get("Text", row.get("Transaction", "Operación SEC")))
-                    ),
+                    "trans": html.escape(str(row.get("Text", row.get("Transaction", "Operación SEC")))),
                     "shares": f"{int(shares_val):,}" if shares_val >= 0 else "N/D",
                     "valor": fmt_num(row.get("Value"))
                 })
@@ -342,10 +288,7 @@ def obtener_vencimientos_vigentes(symbol):
         activo = yf.Ticker(symbol)
         opciones = activo.options or ()
         hoy = datetime.now().date()
-        vigentes = [
-            d for d in opciones
-            if datetime.strptime(d, "%Y-%m-%d").date() >= hoy
-        ]
+        vigentes = [d for d in opciones if datetime.strptime(d, "%Y-%m-%d").date() >= hoy]
         return vigentes if vigentes else list(opciones)
     except Exception:
         return []
@@ -360,25 +303,17 @@ def obtener_cadena_opciones(symbol, vencimiento):
         return pd.DataFrame(), pd.DataFrame()
 
 # ==============================================================================
-# 4. PLANTILLAS HTML (LINEAS CORTAS SEGURAS PARA IPAD)
+# 4. PLANTILLAS HTML
 # ==============================================================================
 def widget_tradingview_html(symbol, tv_interval="D", theme="dark", height=540):
     bg = "#060b12" if theme == "dark" else "#ffffff"
-    grid = (
-        "rgba(255, 255, 255, 0.06)"
-        if theme == "dark"
-        else "rgba(46, 46, 46, 0.06)"
-    )
+    grid = "rgba(255, 255, 255, 0.06)" if theme == "dark" else "rgba(46, 46, 46, 0.06)"
     partes = [
         "<!DOCTYPE html><html>",
         "<body style='margin:0;padding:0;background:" + bg + ";'>",
-        "<div class='tradingview-widget-container' style='height:"
-        + str(height) + "px;width:100%'>",
-        "<div class='tradingview-widget-container__widget'"
-        " style='height:calc(100% - 32px);width:100%'></div>",
-        "<script type='text/javascript'"
-        " src='https://s3.tradingview.com/external-embedding/"
-        "embed-widget-advanced-chart.js' async>",
+        "<div class='tradingview-widget-container' style='height:" + str(height) + "px;width:100%'>",
+        "<div class='tradingview-widget-container__widget' style='height:calc(100% - 32px);width:100%'></div>",
+        "<script type='text/javascript' src='https://s3.tradingview.com/external-embedding/embed-widget-advanced-chart.js' async>",
         "{",
         '  "allow_symbol_change": true,',
         '  "calendar": false,',
@@ -403,214 +338,25 @@ def widget_tradingview_html(symbol, tv_interval="D", theme="dark", height=540):
         "}",
         "</script></div></body></html>"
     ]
-    return "\n".join(partes)
+    return "".join(partes)
 
 def construir_informe_html_dinamico(symbol, precio_act, info, noticias, insiders):
     colores = obtener_colores_marca(symbol)
-    nombre_empresa = html.escape(
-        str(info.get("longName") or info.get("shortName") or symbol)
-    )
+    nombre_empresa = html.escape(str(info.get("longName") or info.get("shortName") or symbol))
     exchange = html.escape(str(info.get("exchange") or "NYSE / NASDAQ"))
     sector = html.escape(str(info.get("sector") or "Mercado Bursátil"))
     industria = html.escape(str(info.get("industry") or "Activo Cotizado"))
     website = str(info.get("website") or "")
-    dominio = (
-        website.replace("https://", "").replace("http://", "").split("/")[0]
-        if website
-        else f"{symbol.lower()}.com"
-    )
-    resumen = html.escape(
-        str(
-            info.get("longBusinessSummary")
-            or f"{nombre_empresa} ({symbol}) cotiza en {exchange} ({sector})."
-        )
-    )
+    dominio = website.replace("https://", "").replace("http://", "").split("/")[0] if website else f"{symbol.lower()}.com"
+    resumen = html.escape(str(info.get("longBusinessSummary") or f"{nombre_empresa} ({symbol}) cotiza en {exchange} ({sector})."))
 
     mcap = fmt_num(info.get("marketCap"))
     rev_growth = info.get("revenueGrowth")
-    rev_growth_str = (
-        f"{float(rev_growth)*100:+.1f}%"
-        if isinstance(rev_growth, (int, float)) and np.isfinite(rev_growth)
-        else "N/D"
-    )
-    rev_growth_cls = (
-        "positive"
-        if isinstance(rev_growth, (int, float)) and float(rev_growth) >= 0
-        else "negative"
-    )
+    rev_growth_str = f"{float(rev_growth)*100:+.1f}%" if isinstance(rev_growth, (int, float)) and np.isfinite(rev_growth) else "N/D"
+    rev_growth_cls = "positive" if isinstance(rev_growth, (int, float)) and float(rev_growth) >= 0 else "negative"
 
     total_rev = fmt_num(info.get("totalRevenue"))
     net_income = fmt_num(info.get("netIncomeToCommon"))
     roe = info.get("returnOnEquity")
-    roe_str = (
-        f"{float(roe)*100:.1f}%"
-        if isinstance(roe, (int, float)) and np.isfinite(roe)
-        else "N/D"
-    )
-    fwd_pe = (
-        f"{float(info.get('forwardPE')):.1f}x"
-        if isinstance(info.get("forwardPE"), (int, float))
-        and np.isfinite(info.get("forwardPE"))
-        else "N/D"
-    )
-    trail_pe = (
-        f"{float(info.get('trailingPE')):.1f}x"
-        if isinstance(info.get("trailingPE"), (int, float))
-        and np.isfinite(info.get("trailingPE"))
-        else "N/D"
-    )
-    eps_trail = (
-        f"${float(info.get('trailingEps')):.2f}"
-        if isinstance(info.get("trailingEps"), (int, float))
-        and np.isfinite(info.get("trailingEps"))
-        else "N/D"
-    )
-    eps_fwd = (
-        f"${float(info.get('forwardEps')):.2f}"
-        if isinstance(info.get("forwardEps"), (int, float))
-        and np.isfinite(info.get("forwardEps"))
-        else "N/D"
-    )
-    target_mean = (
-        f"${float(info.get('targetMeanPrice')):.2f}"
-        if isinstance(info.get("targetMeanPrice"), (int, float))
-        and np.isfinite(info.get("targetMeanPrice"))
-        else "N/D"
-    )
-    target_high = (
-        f"${float(info.get('targetHighPrice')):.2f}"
-        if isinstance(info.get("targetHighPrice"), (int, float))
-        and np.isfinite(info.get("targetHighPrice"))
-        else "N/D"
-    )
-    target_low = (
-        f"${float(info.get('targetLowPrice')):.2f}"
-        if isinstance(info.get("targetLowPrice"), (int, float))
-        and np.isfinite(info.get("targetLowPrice"))
-        else "N/D"
-    )
-    rec_key = html.escape(
-        str(info.get("recommendationKey") or "HOLD").upper().replace("_", " ")
-    )
-
-    high_52 = _safe_float(info.get("fiftyTwoWeekHigh"), precio_act)
-    low_52 = _safe_float(info.get("fiftyTwoWeekLow"), precio_act)
-    dist_ath = ((precio_act - high_52) / high_52) * 100.0 if high_52 > 0 else 0.0
-    dist_cls = "positive" if dist_ath >= -5 else "negative"
-
-    profit_margin = (
-        f"{float(info.get('profitMargins'))*100:.1f}%"
-        if isinstance(info.get("profitMargins"), (int, float))
-        and np.isfinite(info.get("profitMargins"))
-        else "N/D"
-    )
-    op_margin = (
-        f"{float(info.get('operatingMargins'))*100:.1f}%"
-        if isinstance(info.get("operatingMargins"), (int, float))
-        and np.isfinite(info.get("operatingMargins"))
-        else "N/D"
-    )
-    total_cash = fmt_num(info.get("totalCash"))
-    total_debt = fmt_num(info.get("totalDebt"))
-    emp_val = _safe_float(info.get("fullTimeEmployees"), -1)
-    empleados = f"{int(emp_val):,}" if emp_val >= 0 else "N/D"
-    pais = html.escape(str(info.get("country") or "Global"))
-
-    if noticias:
-        news_cards = []
-        for n in noticias:
-            news_cards.append(
-                "<div class='news-card'><div>"
-                f"<div class='news-date'>{n['prov']}"
-                " <span class='news-tag-res'>• NOTICIA</span></div>"
-                f"<h3>{n['titulo']}</h3><p>{n['resumen']}...</p></div>"
-                f"<a href='{n['url']}' target='_blank' class='news-link'>"
-                "Leer noticia 🡪</a></div>"
-            )
-        news_cards_html = "".join(news_cards)
-    else:
-        news_cards_html = (
-            "<div class='news-card'><div>"
-            f"<div class='news-date'>MERCADO • {symbol}</div>"
-            f"<h3>Seguimiento corporativo de {nombre_empresa}</h3>"
-            "<p>Consulte los comunicados oficiales de relación con"
-            f" inversores y presentaciones SEC para {symbol}.</p></div>"
-            f"<a href='https://finance.yahoo.com/quote/{symbol}/news'"
-            " target='_blank' class='news-link'>Ver noticias 🡪</a></div>"
-        )
-
-    if insiders:
-        ins_cards = []
-        for ins in insiders:
-            t_low = ins["trans"].lower()
-            if "sale" in t_low or "sell" in t_low:
-                tag_cls, tag_txt = "tag-sell", "VENTA"
-            elif "purchase" in t_low or "buy" in t_low:
-                tag_cls, tag_txt = "tag-buy", "COMPRA"
-            else:
-                tag_cls, tag_txt = "tag-neutral", "REGISTRO"
-            ins_cards.append(
-                "<div class='flow-item'><div class='flow-item-top'>"
-                f"<span class='flow-name'>{ins['nombre']}</span>"
-                f"<span class='{tag_cls}'>{tag_txt}</span></div>"
-                f"<div class='flow-details'>{ins['trans']}"
-                f" • Acciones: {ins['shares']} ({ins['valor']})</div></div>"
-            )
-        insider_html = "".join(ins_cards)
-    else:
-        insider_html = (
-            "<div class='flow-empty'>No se reportan transacciones"
-            f" recientes de directivos (Form 4) para <b>{symbol}</b>.</div>"
-        )
-
-    css_lines = [
-        f":root {{ --navy: {colores['navy']}; --accent: {colores['accent']};"
-        f" --accent-soft: {colores['soft']}; --light: #F7F7F7;"
-        " --card-bg: #FFFFFF; --text-dark: #1A1A1A; --text-muted: #666666;"
-        " --green: #00875A; --green-bg: #E3FCEF; --red: #E53E3E;"
-        " --red-bg: #FFEBE6; --gray-tag: #718096;"
-        " --gray-tag-bg: #EDF2F7; --border-color: #E2E8F0; }",
-        "* { box-sizing: border-box; margin: 0; padding: 0; }",
-        "body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI',"
-        " Roboto, Arial, sans-serif; background-color: var(--light);"
-        " color: var(--text-dark); line-height: 1.5; padding-bottom: 40px; }",
-        ".hero { background-color: var(--navy); color: #FFFFFF;"
-        " border-left: 14px solid var(--accent); padding: 28px 24px;"
-        " margin-bottom: 20px; }",
-        ".hero-container { max-width: 1200px; margin: 0 auto; }",
-        ".hero-header { display: flex; align-items: center; gap: 18px;"
-        " margin-bottom: 18px; }",
-        ".logo-box { width: 82px; height: 82px; background-color: #FFFFFF;"
-        " border-radius: 14px; display: flex; align-items: center;"
-        " justify-content: center; flex-shrink: 0; padding: 8px;"
-        " font-weight: 800; color: var(--navy); font-size: 20px; }",
-        ".logo-box img { max-width: 100%; max-height: 100%; object-fit: contain; }",
-        ".hero-title-row { display: flex; align-items: center; gap: 12px;"
-        " flex-wrap: wrap; }",
-        ".hero-title-area h1 { font-family: Georgia, serif; font-size: 30px;"
-        " font-weight: 700; color: #FFFFFF; }",
-        ".ticker-badge { border: 1.5px solid var(--accent); color: #FFFFFF;"
-        " padding: 4px 12px; border-radius: 20px; font-size: 14px;"
-        " font-weight: 700; background: var(--accent); }",
-        ".hero-subtitle { color: #CBD5E0; font-size: 14px; margin-top: 5px; }",
-        ".stat-strip { display: grid; grid-template-columns: repeat(5, 1fr);"
-        " gap: 12px; margin-top: 16px; }",
-        ".stat-card { background-color: #FFFFFF; color: var(--text-dark);"
-        " padding: 13px; border-radius: 10px;"
-        " border-left: 4px solid var(--accent); }",
-        ".stat-label { font-size: 11px; text-transform: uppercase;"
-        " color: var(--text-muted); font-weight: 600; margin-bottom: 4px; }",
-        ".stat-value { font-size: 20px; font-weight: 700; color: var(--navy); }",
-        ".stat-sub { font-size: 12px; margin-top: 3px; font-weight: 600; }",
-        ".stat-sub.positive { color: var(--green); }",
-        ".stat-sub.negative { color: var(--red); }",
-        ".container { max-width: 1200px; margin: 0 auto; padding: 0 16px; }",
-        ".dragsec { background: var(--card-bg); border-radius: 12px;"
-        " padding: 20px; margin-bottom: 18px;"
-        " border: 1px solid var(--border-color); }",
-        ".dragsec-head { display: flex; align-items: center;"
-        " justify-content: space-between; border-bottom: 2px solid var(--light);"
-        " padding-bottom: 10px; margin-bottom: 16px; }",
-        ".dragsec-head h2 { font-family: Georgia, serif; font-size: 20px;"
-        " color: var(--navy); font-weight: 700; }",
-        ".
+    roe_str = f"{float(roe)*100:.1f}%" if isinstance(roe, (int, float)) and np.isfinite(roe) else "N/D"
+    fwd_pe = f"{float(info.get('forwardPE')):.1f}x" if isinstance(info.get("forwardPE"), (int, float)) and np.isfinite(info.get("forwardPE")) else "N/D"
