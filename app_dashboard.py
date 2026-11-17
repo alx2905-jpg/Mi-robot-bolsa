@@ -133,11 +133,20 @@ def cargar_datos_y_modelo(symbol, inter):
     df_diario['Target'] = (df_diario['Close'].shift(-5) / df_diario['Close'] - 1 >= 0.02).astype(int)
 
     features = ['Ret_1d', 'Dist_EMA21', 'RSI', 'Vol_20d', 'Vol_Rel']
-    df_clean = df_diario.dropna().copy()
+    df_feat = df_diario[features].replace([np.inf, -np.inf], np.nan).ffill().bfill()
+    df_clean = df_feat.copy()
+    df_clean['Target'] = df_diario['Target']
+    df_clean = df_clean.iloc[:-5].dropna()
+
     corte = int(len(df_clean) * 0.8)
+    y_train = df_clean['Target'].iloc[:corte]
+    if len(df_clean) >= 30 and y_train.nunique() > 1:
     modelo = CalibratedClassifierCV(RandomForestClassifier(n_estimators=200, max_depth=5, random_state=42), method='isotonic', cv=3)
-    modelo.fit(df_clean[features].iloc[:corte], df_clean['Target'].iloc[:corte])
-    prob_call = modelo.predict_proba(df_diario[features].iloc[[-1]].dropna())[:, 1][0]
+    modelo.fit(df_clean[features].iloc[:corte], y_train)
+    prob_call = float(modelo.predict_proba(df_feat.iloc[[-1]])[:, 1][0])
+    else:
+    prob_call = 0.50
+
 
     periodo_velas = "6mo" if inter == "1d" else "1mo" if inter == "1h" else "5d"
     df_velas = activo.history(period=periodo_velas, interval=inter).tail(80)
