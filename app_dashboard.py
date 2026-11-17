@@ -133,11 +133,19 @@ def cargar_datos_y_modelo(symbol, inter):
     df_diario['Target'] = (df_diario['Close'].shift(-5) / df_diario['Close'] - 1 >= 0.02).astype(int)
 
     features = ['Ret_1d', 'Dist_EMA21', 'RSI', 'Vol_20d', 'Vol_Rel']
-    df_clean = df_diario.dropna().copy()
+    df_feat = df_diario[features].replace([np.inf, -np.inf], np.nan).ffill().bfill()
+    df_clean = df_feat.copy()
+    df_clean['Target'] = df_diario['Target']
+    df_clean = df_clean.iloc[:-5].dropna()
+
     corte = int(len(df_clean) * 0.8)
-    modelo = CalibratedClassifierCV(RandomForestClassifier(n_estimators=200, max_depth=5, random_state=42), method='isotonic', cv=3)
-    modelo.fit(df_clean[features].iloc[:corte], df_clean['Target'].iloc[:corte])
-    prob_call = modelo.predict_proba(df_diario[features].iloc[[-1]].dropna())[:, 1][0]
+    y_train = df_clean['Target'].iloc[:corte]
+    if len(df_clean) >= 30 and y_train.nunique() > 1:
+        modelo = CalibratedClassifierCV(RandomForestClassifier(n_estimators=200, max_depth=5, random_state=42), method='isotonic', cv=3)
+        modelo.fit(df_clean[features].iloc[:corte], y_train)
+        prob_call = float(modelo.predict_proba(df_feat.iloc[[-1]])[:, 1][0])
+    else:
+        prob_call = 0.50
 
     periodo_velas = "6mo" if inter == "1d" else "1mo" if inter == "1h" else "5d"
     df_velas = activo.history(period=periodo_velas, interval=inter).tail(80)
@@ -155,7 +163,6 @@ def cargar_datos_y_modelo(symbol, inter):
     df_velas['Signal'] = df_velas['MACD'].ewm(span=9, adjust=False).mean()
     df_velas['Hist'] = df_velas['MACD'] - df_velas['Signal']
 
-    # Extraer fundamentales blindados contra errores de estructura
     info = {}
     try:
         raw_info = activo.info
@@ -194,6 +201,294 @@ def cargar_datos_y_modelo(symbol, inter):
         insiders_limpios = []
 
     return df_diario, df_velas, prob_call, info, noticias_limpias, insiders_limpios
+
+PLANTILLA_HTML_REPORTE = '''<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <style>
+    :root {
+      --navy: #11052C; --accent: #820AD1; --accent-soft: #F3E8FF; --light: #F7F7F7;
+      --card-bg: #FFFFFF; --text-dark: #1A1A1A; --text-muted: #666666;
+      --green: #00875A; --green-bg: #E3FCEF; --red: #E53E3E; --red-bg: #FFEBE6;
+      --gray-tag: #718096; --gray-tag-bg: #EDF2F7; --border-color: #E2E8F0;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+      background-color: var(--light); color: var(--text-dark); line-height: 1.5; padding-bottom: 40px;
+    }
+    .hero { background-color: var(--navy); color: #FFFFFF; border-left: 14px solid var(--accent); padding: 28px 24px; margin-bottom: 20px; }
+    .hero-container { max-width: 1200px; margin: 0 auto; }
+    .hero-header { display: flex; align-items: center; gap: 18px; margin-bottom: 18px; }
+    .logo-box {
+      width: 82px; height: 82px; background-color: #FFFFFF; border-radius: 14px;
+      display: flex; align-items: center; justify-content: center; flex-shrink: 0;
+      padding: 8px; font-weight: 800; color: var(--navy); font-size: 20px;
+    }
+    .logo-box img { max-width: 100%; max-height: 100%; object-fit: contain; }
+    .hero-title-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+    .hero-title-area h1 { font-family: Georgia, serif; font-size: 32px; font-weight: 700; color: #FFFFFF; }
+    .ticker-badge {
+      border: 1.5px solid var(--accent); color: var(--accent-soft); padding: 4px 12px;
+      border-radius: 20px; font-size: 14px; font-weight: 700; background: rgba(130, 10, 209, 0.2);
+    }
+    .hero-subtitle { color: #A0AEC0; font-size: 14px; margin-top: 5px; }
+    .stat-strip { display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px; margin-top: 16px; }
+    .stat-card { background-color: #FFFFFF; color: var(--text-dark); padding: 13px; border-radius: 10px; border-left: 4px solid var(--accent); }
+    .stat-label { font-size: 11px; text-transform: uppercase; color: var(--text-muted); font-weight: 600; margin-bottom: 4px; }
+    .stat-value { font-size: 20px; font-weight: 700; color: var(--navy); }
+    .stat-sub { font-size: 12px; margin-top: 3px; font-weight: 600; }
+    .stat-sub.positive { color: var(--green); }
+    .stat-sub.negative { color: var(--red); }
+    .container { max-width: 1200px; margin: 0 auto; padding: 0 16px; }
+    .dragsec { background: var(--card-bg); border-radius: 12px; padding: 20px; margin-bottom: 18px; border: 1px solid var(--border-color); }
+    .dragsec-head { display: flex; align-items: center; justify-content: space-between; border-bottom: 2px solid var(--light); padding-bottom: 10px; margin-bottom: 16px; }
+    .dragsec-head h2 { font-family: Georgia, serif; font-size: 20px; color: var(--navy); font-weight: 700; }
+    .drag-handle { background: var(--light); border: 1px solid var(--border-color); border-radius: 6px; padding: 4px 10px; font-size: 12px; color: var(--text-muted); }
+    .about-card { font-size: 14.5px; line-height: 1.65; color: #2D3748; }
+    .highlight { color: var(--accent); font-weight: 700; background: var(--accent-soft); padding: 2px 6px; border-radius: 4px; }
+    .grid-2x2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+    .comp-card { background: var(--light); border-left: 6px solid var(--accent); padding: 15px; border-radius: 8px; }
+    .comp-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 5px; }
+    .comp-title { font-weight: 700; font-size: 15px; color: var(--navy); }
+    .comp-rank { background: var(--accent); color: #FFFFFF; font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 12px; }
+    .comp-share { font-size: 13px; color: var(--accent); font-weight: 600; margin-bottom: 5px; }
+    .comp-desc { font-size: 13px; color: var(--text-muted); }
+    .fund-top { display: flex; align-items: center; justify-content: space-between; background: var(--accent-soft); border-radius: 10px; padding: 16px; margin-bottom: 16px; }
+    .mcap-large .val { font-family: Georgia, serif; font-size: 28px; font-weight: 700; color: var(--accent); display: block; }
+    .mcap-large .lbl { font-size: 11px; text-transform: uppercase; color: var(--text-muted); font-weight: 600; }
+    .fund-metrics-summary { display: flex; gap: 20px; }
+    .metric-item { text-align: right; }
+    .metric-item .v { font-size: 17px; font-weight: 700; color: var(--navy); }
+    .metric-item .l { font-size: 11px; color: var(--text-muted); }
+    .tables-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+    .fund-table { width: 100%; border-collapse: collapse; border-radius: 8px; overflow: hidden; }
+    .fund-table th { padding: 10px 12px; text-align: left; font-size: 13px; color: #FFFFFF; }
+    .fund-table.last th { background: var(--navy); }
+    .fund-table.next th { background: var(--accent); }
+    .fund-table td { padding: 9px 12px; border-bottom: 1px solid var(--border-color); font-size: 13px; }
+    .tech-grid { display: grid; grid-template-columns: 240px 1fr; gap: 16px; }
+    .ath-box { background: var(--navy); color: #FFFFFF; border-radius: 10px; padding: 18px; display: flex; flex-direction: column; justify-content: center; text-align: center; }
+    .ath-number { font-family: Georgia, serif; font-size: 46px; font-weight: 700; color: #FFFFFF; line-height: 1; margin-bottom: 8px; }
+    .ath-details { font-size: 12.5px; color: #A0AEC0; line-height: 1.5; }
+    .tech-bullets-card { background: #FFFFFF; border-left: 6px solid var(--accent); border-radius: 8px; padding: 16px; border: 1px solid var(--border-color); }
+    .tech-bullets-card h3 { font-family: Georgia, serif; font-size: 16px; color: var(--navy); margin-bottom: 8px; }
+    .tech-bullets-card ul { list-style: none; }
+    .tech-bullets-card li { position: relative; padding-left: 16px; margin-bottom: 7px; font-size: 13px; color: #4A5568; }
+    .tech-bullets-card li::before { content: "•"; color: var(--accent); font-size: 18px; position: absolute; left: 0; top: -3px; }
+    .news-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+    .news-card { background: #FFFFFF; border-top: 4px solid var(--accent); border-radius: 8px; padding: 14px; border: 1px solid var(--border-color); display: flex; flex-direction: column; justify-content: space-between; }
+    .news-date { font-size: 10.5px; text-transform: uppercase; color: var(--text-muted); font-weight: 700; margin-bottom: 5px; }
+    .news-tag-res { color: var(--accent); font-weight: 700; }
+    .news-card h3 { font-family: Georgia, serif; font-size: 14.5px; color: var(--navy); margin-bottom: 7px; line-height: 1.3; }
+    .news-card p { font-size: 12.5px; color: #4A5568; margin-bottom: 10px; }
+    .news-link { font-size: 12.5px; font-weight: 700; color: var(--accent); text-decoration: none; }
+    .flow-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+    .flow-card { background: #FFFFFF; border: 1px solid var(--border-color); border-radius: 8px; padding: 16px; }
+    .flow-header h3 { font-family: Georgia, serif; font-size: 16px; color: var(--navy); }
+    .flow-header .sub { font-size: 11px; color: var(--text-muted); text-transform: uppercase; margin-bottom: 10px; }
+    .flow-item { padding: 8px; background: var(--light); border-radius: 6px; font-size: 12px; margin-bottom: 7px; }
+    .flow-item-top { display: flex; justify-content: space-between; align-items: center; margin-bottom: 3px; }
+    .flow-name { font-weight: 700; color: var(--navy); }
+    .tag-sell { background: var(--red-bg); color: var(--red); font-weight: 700; padding: 2px 6px; border-radius: 4px; font-size: 10px; }
+    .tag-buy { background: var(--green-bg); color: var(--green); font-weight: 700; padding: 2px 6px; border-radius: 4px; font-size: 10px; }
+    .tag-neutral { background: var(--gray-tag-bg); color: var(--gray-tag); font-weight: 700; padding: 2px 6px; border-radius: 4px; font-size: 10px; }
+    .flow-empty { background: var(--light); border: 1px dashed var(--border-color); border-radius: 6px; padding: 20px; text-align: center; color: var(--text-muted); font-size: 13px; }
+    .footer { max-width: 1200px; margin: 16px auto 0 auto; text-align: center; font-size: 12px; color: var(--text-muted); }
+    @media (max-width: 768px) {
+      .stat-strip { grid-template-columns: 1fr 1fr; }
+      .grid-2x2, .tables-grid, .tech-grid, .news-grid, .flow-grid { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <header class="hero">
+    <div class="hero-container">
+      <div class="hero-header">
+        <div class="logo-box">
+          <img src="https://logo.clearbit.com/__DOMINIO__" alt="__SYMBOL__" onerror="this.style.display='none'; this.parentNode.innerText='__SYMBOL__';">
+        </div>
+        <div class="hero-title-area">
+          <div class="hero-title-row">
+            <h1>__NOMBRE_EMPRESA__</h1>
+            <span class="ticker-badge">__EXCHANGE__: __SYMBOL__</span>
+          </div>
+          <p class="hero-subtitle">Análisis fundamental y técnico en vivo • __SECTOR__ • __FECHA_HOY__</p>
+        </div>
+      </div>
+
+      <div class="stat-strip">
+        <div class="stat-card">
+          <div class="stat-label">Precio Actual</div>
+          <div class="stat-value">__PRECIO_ACT__</div>
+          <div class="stat-sub positive">Consenso: __REC_KEY__</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Market Cap</div>
+          <div class="stat-value">__MCAP__</div>
+          <div class="stat-sub">P/E Forward: __FWD_PE__</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Crecimiento Ventas YoY</div>
+          <div class="stat-value">__REV_GROWTH_STR__</div>
+          <div class="stat-sub __REV_GROWTH_CLS__">Ingresos: __TOTAL_REV__</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Beneficio Neto / ROE</div>
+          <div class="stat-value">__NET_INCOME__</div>
+          <div class="stat-sub positive">ROE: __ROE_STR__</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Distancia a Máx 52s</div>
+          <div class="stat-value">__DIST_ATH__</div>
+          <div class="stat-sub __DIST_CLS__">Máx 52s: __HIGH_52__</div>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <main class="container">
+    <section class="dragsec">
+      <div class="dragsec-head">
+        <h2>¿A qué se dedica __NOMBRE_EMPRESA__?</h2>
+        <span class="drag-handle">Perfil Corporativo</span>
+      </div>
+      <div class="about-card">
+        <span class="highlight">__SECTOR__ • __INDUSTRIA__</span> — __RESUMEN__
+      </div>
+    </section>
+
+    <section class="dragsec">
+      <div class="dragsec-head">
+        <h2>Posición financiera y estructura</h2>
+        <span class="drag-handle">Balance</span>
+      </div>
+      <div class="grid-2x2">
+        <div class="comp-card">
+          <div class="comp-header">
+            <span class="comp-title">Márgenes de Rentabilidad</span>
+            <span class="comp-rank">Eficiencia</span>
+          </div>
+          <div class="comp-share">Margen Neto: __PROFIT_MARGIN__ • Operativo: __OP_MARGIN__</div>
+          <p class="comp-desc">Capacidad de conversión de ingresos (__TOTAL_REV__) en utilidad neta (__NET_INCOME__) con un retorno sobre el patrimonio (ROE) de __ROE_STR__.</p>
+        </div>
+        <div class="comp-card">
+          <div class="comp-header">
+            <span class="comp-title">Solidez de Caja vs Deuda</span>
+            <span class="comp-rank">Balance</span>
+          </div>
+          <div class="comp-share">Caja Total: __TOTAL_CASH__ • Deuda Total: __TOTAL_DEBT__</div>
+          <p class="comp-desc">Posición de liquidez disponible para financiar crecimiento orgánico y operaciones globales (__PAIS__ • __EMPLEADOS__ empleados).</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="dragsec">
+      <div class="dragsec-head">
+        <h2>Datos fundamentales y valoración</h2>
+        <span class="drag-handle">Fundamentales</span>
+      </div>
+      <div class="fund-top">
+        <div class="mcap-large">
+          <span class="lbl">Capitalización de Mercado (__SYMBOL__)</span>
+          <span class="val">__MCAP__ USD</span>
+        </div>
+        <div class="fund-metrics-summary">
+          <div class="metric-item"><div class="v">__TRAIL_PE__</div><div class="l">Trailing P/E</div></div>
+          <div class="metric-item"><div class="v">__FWD_PE__</div><div class="l">Forward P/E</div></div>
+          <div class="metric-item"><div class="v">__TARGET_MEAN__</div><div class="l">Objetivo Analistas</div></div>
+        </div>
+      </div>
+
+      <div class="tables-grid">
+        <table class="fund-table last">
+          <thead><tr><th colspan="2">Métricas Actuales (TTM)</th></tr></thead>
+          <tbody>
+            <tr><td>Ingresos Totales (Revenue)</td><td><b>__TOTAL_REV__</b></td></tr>
+            <tr><td>Utilidad Neta (Net Income)</td><td><b>__NET_INCOME__</b></td></tr>
+            <tr><td>EPS (Últimos 12 meses)</td><td><b>__EPS_TRAIL__</b></td></tr>
+            <tr><td>Retorno sobre Patrimonio (ROE)</td><td><b>__ROE_STR__</b></td></tr>
+          </tbody>
+        </table>
+
+        <table class="fund-table next">
+          <thead><tr><th colspan="2">Consenso y Proyección de Analistas</th></tr></thead>
+          <tbody>
+            <tr><td>Recomendación Consenso</td><td><b>__REC_KEY__</b></td></tr>
+            <tr><td>EPS Estimado (Forward)</td><td><b>__EPS_FWD__</b></td></tr>
+            <tr><td>Precio Objetivo Medio</td><td><b>__TARGET_MEAN__</b></td></tr>
+            <tr><td>Rango Objetivos (Mín – Máx)</td><td><b>__TARGET_LOW__ – __TARGET_HIGH__</b></td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="dragsec">
+      <div class="dragsec-head">
+        <h2>Análisis técnico — Distancia a máximos 52 semanas</h2>
+        <span class="drag-handle">Niveles</span>
+      </div>
+      <div class="tech-grid">
+        <div class="ath-box">
+          <div class="ath-number">__DIST_ATH__</div>
+          <div class="ath-details">
+            Máximo 52 Semanas: <b>__HIGH_52__ USD</b><br>
+            Cotización Actual: <b>__PRECIO_ACT__ USD</b><br>
+            Mínimo 52 Semanas: <b>__LOW_52__ USD</b>
+          </div>
+        </div>
+        <div class="tech-bullets-card">
+          <h3>Estructura de Precios (__SYMBOL__)</h3>
+          <ul>
+            <li><b>Rango anual:</b> El activo cotiza entre un soporte anual de <b>__LOW_52__</b> y una resistencia máxima de <b>__HIGH_52__</b>.</li>
+            <li><b>Objetivo institucional:</b> El consenso de analistas proyecta un valor razonable medio de <b>__TARGET_MEAN__</b> (máximo estimado en <b>__TARGET_HIGH__</b>).</li>
+            <li><b>Sincronización multi-pestaña:</b> Puede contrastar estos niveles fundamentales con el gráfico interactivo de TradingView (Pestaña 1) y la proyección Monte Carlo (Pestaña 2).</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="dragsec">
+      <div class="dragsec-head">
+        <h2>Últimas noticias (__SYMBOL__)</h2>
+        <span class="drag-handle">Noticias</span>
+      </div>
+      <div class="news-grid">__NEWS_CARDS_HTML__</div>
+    </section>
+
+    <section class="dragsec">
+      <div class="dragsec-head">
+        <h2>Insider trading — Movimientos de directivos</h2>
+        <span class="drag-handle">SEC Form 4</span>
+      </div>
+      <div class="flow-grid">
+        <div class="flow-card">
+          <div class="flow-header">
+            <h3>Transacciones recientes de ejecutivos</h3>
+            <div class="sub">Registros SEC Form 4 • __SYMBOL__</div>
+          </div>
+          __INSIDER_HTML__
+        </div>
+        <div class="flow-card">
+          <div class="flow-header">
+            <h3>Resumen de consenso institucional</h3>
+            <div class="sub">Valoración y cobertura</div>
+          </div>
+          <div class="flow-empty">
+            Calificación actual del consenso: <b>__REC_KEY__</b><br><br>
+            Precio Objetivo Medio: <b>__TARGET_MEAN__</b> vs Precio Actual: <b>__PRECIO_ACT__</b>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="footer">
+    Informe Fundamental Dinámico generado en tiempo real para __NOMBRE_EMPRESA__ (__SYMBOL__) • Fuentes: Yahoo Finance & SEC Filings
+  </footer>
+</body>
+</html>'''
 
 def construir_informe_html_dinamico(symbol, precio_act, info, noticias, insiders):
     nombre_empresa = html.escape(str(info.get("longName") or info.get("shortName") or symbol))
@@ -234,346 +529,80 @@ def construir_informe_html_dinamico(symbol, precio_act, info, noticias, insiders
     empleados = f"{int(info.get('fullTimeEmployees')):,}" if isinstance(info.get("fullTimeEmployees"), (int, float)) else "N/D"
     pais = html.escape(str(info.get("country") or "Global"))
 
-    # Noticias HTML
     if noticias:
         news_cards_html = ""
         for n in noticias:
-            news_cards_html += f"""
-            <div class="news-card">
-              <div>
-                <div class="news-date">{n['prov']} <span class="news-tag-res">• NOTICIA EN VIVO</span></div>
-                <h3>{n['titulo']}</h3>
-                <p>{n['resumen']}...</p>
-              </div>
-              <a href="{n['url']}" target="_blank" class="news-link">Leer noticia 🡪</a>
-            </div>
-            """
+            news_cards_html += (
+                f'<div class="news-card"><div>'
+                f'<div class="news-date">{n["prov"]} <span class="news-tag-res">• NOTICIA EN VIVO</span></div>'
+                f'<h3>{n["titulo"]}</h3><p>{n["resumen"]}...</p></div>'
+                f'<a href="{n["url"]}" target="_blank" class="news-link">Leer noticia 🡪</a></div>'
+            )
     else:
-        news_cards_html = f"""
-        <div class="news-card">
-          <div>
-            <div class="news-date">MERCADO • {symbol}</div>
-            <h3>Seguimiento corporativo de {nombre_empresa}</h3>
-            <p>Consulte los comunicados oficiales de relación con inversores y presentaciones SEC para {symbol}.</p>
-          </div>
-          <a href="https://finance.yahoo.com/quote/{symbol}/news" target="_blank" class="news-link">Ver noticias en Yahoo Finance 🡪</a>
-        </div>
-        """
+        news_cards_html = (
+            f'<div class="news-card"><div>'
+            f'<div class="news-date">MERCADO • {symbol}</div>'
+            f'<h3>Seguimiento corporativo de {nombre_empresa}</h3>'
+            f'<p>Consulte los comunicados oficiales de relación con inversores y presentaciones SEC para {symbol}.</p></div>'
+            f'<a href="https://finance.yahoo.com/quote/{symbol}/news" target="_blank" class="news-link">Ver noticias en Yahoo Finance 🡪</a></div>'
+        )
 
-    # Insiders HTML
     if insiders:
         insider_html = ""
         for ins in insiders:
-            t_low = ins['trans'].lower()
+            t_low = ins["trans"].lower()
             tag_cls = "tag-sell" if ("sale" in t_low or "sell" in t_low) else "tag-buy" if ("purchase" in t_low or "buy" in t_low) else "tag-neutral"
             tag_txt = "VENTA" if tag_cls == "tag-sell" else "COMPRA" if tag_cls == "tag-buy" else "REGISTRO"
-            insider_html += f"""
-            <div class="flow-item">
-              <div class="flow-item-top">
-                <span class="flow-name">{ins['nombre']}</span>
-                <span class="{tag_cls}">{tag_txt}</span>
-              </div>
-              <div class="flow-details">{ins['trans']} • Acciones: {ins['shares']} ({ins['valor']})</div>
-            </div>
-            """
+            insider_html += (
+                f'<div class="flow-item"><div class="flow-item-top">'
+                f'<span class="flow-name">{ins["nombre"]}</span><span class="{tag_cls}">{tag_txt}</span></div>'
+                f'<div class="flow-details">{ins["trans"]} • Acciones: {ins["shares"]} ({ins["valor"]})</div></div>'
+            )
     else:
-        insider_html = f"""
-        <div class="flow-empty">
-          No se reportan transacciones recientes de directivos (Form 4) en los últimos días para <b>{symbol}</b>.
-        </div>
-        """
+        insider_html = f'<div class="flow-empty">No se reportan transacciones recientes de directivos (Form 4) en los últimos días para <b>{symbol}</b>.</div>'
 
-    fecha_hoy = datetime.now().strftime("%d/%m/%Y")
+    reemplazos = {
+        "__DOMINIO__": dominio,
+        "__SYMBOL__": symbol,
+        "__NOMBRE_EMPRESA__": nombre_empresa,
+        "__EXCHANGE__": exchange,
+        "__SECTOR__": sector,
+        "__INDUSTRIA__": industria,
+        "__RESUMEN__": resumen,
+        "__FECHA_HOY__": datetime.now().strftime("%d/%m/%Y"),
+        "__PRECIO_ACT__": f"${precio_act:.2f}",
+        "__REC_KEY__": rec_key,
+        "__MCAP__": mcap,
+        "__FWD_PE__": fwd_pe,
+        "__TRAIL_PE__": trail_pe,
+        "__REV_GROWTH_STR__": rev_growth_str,
+        "__REV_GROWTH_CLS__": rev_growth_cls,
+        "__TOTAL_REV__": total_rev,
+        "__NET_INCOME__": net_income,
+        "__ROE_STR__": roe_str,
+        "__DIST_ATH__": f"{dist_ath:.1f}%",
+        "__DIST_CLS__": dist_cls,
+        "__HIGH_52__": f"${high_52:.2f}",
+        "__LOW_52__": f"${low_52:.2f}",
+        "__PROFIT_MARGIN__": profit_margin,
+        "__OP_MARGIN__": op_margin,
+        "__TOTAL_CASH__": total_cash,
+        "__TOTAL_DEBT__": total_debt,
+        "__PAIS__": pais,
+        "__EMPLEADOS__": empleados,
+        "__EPS_TRAIL__": eps_trail,
+        "__EPS_FWD__": eps_fwd,
+        "__TARGET_MEAN__": target_mean,
+        "__TARGET_LOW__": target_low,
+        "__TARGET_HIGH__": target_high,
+        "__NEWS_CARDS_HTML__": news_cards_html,
+        "__INSIDER_HTML__": insider_html,
+    }
 
-    return f"""
-<!DOCTYPE html>
-<html lang="es">
-<head>
-  <meta charset="UTF-8">
-  <style>
-    :root {{
-      --navy: #11052C; --accent: #820AD1; --accent-soft: #F3E8FF; --light: #F7F7F7;
-      --card-bg: #FFFFFF; --text-dark: #1A1A1A; --text-muted: #666666;
-      --green: #00875A; --green-bg: #E3FCEF; --red: #E53E3E; --red-bg: #FFEBE6;
-      --gray-tag: #718096; --gray-tag-bg: #EDF2F7; --border-color: #E2E8F0;
-    }}
-    * {{ box-sizing: border-box; margin: 0; padding: 0; }}
-    body {{
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
-      background-color: var(--light); color: var(--text-dark); line-height: 1.5; padding-bottom: 40px;
-    }}
-    .hero {{ background-color: var(--navy); color: #FFFFFF; border-left: 14px solid var(--accent); padding: 28px 24px; margin-bottom: 20px; }}
-    .hero-container {{ max-width: 1200px; margin: 0 auto; }}
-    .hero-header {{ display: flex; align-items: center; gap: 18px; margin-bottom: 18px; }}
-    .logo-box {{
-      width: 82px; height: 82px; background-color: #FFFFFF; border-radius: 14px;
-      display: flex; align-items: center; justify-content: center; flex-shrink: 0;
-      padding: 8px; font-weight: 800; color: var(--navy); font-size: 20px;
-    }}
-    .logo-box img {{ max-width: 100%; max-height: 100%; object-fit: contain; }}
-    .hero-title-row {{ display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }}
-    .hero-title-area h1 {{ font-family: Georgia, serif; font-size: 32px; font-weight: 700; color: #FFFFFF; }}
-    .ticker-badge {{
-      border: 1.5px solid var(--accent); color: var(--accent-soft); padding: 4px 12px;
-      border-radius: 20px; font-size: 14px; font-weight: 700; background: rgba(130, 10, 209, 0.2);
-    }}
-    .hero-subtitle {{ color: #A0AEC0; font-size: 14px; margin-top: 5px; }}
-    .stat-strip {{ display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px; margin-top: 16px; }}
-    .stat-card {{ background-color: #FFFFFF; color: var(--text-dark); padding: 13px; border-radius: 10px; border-left: 4px solid var(--accent); }}
-    .stat-label {{ font-size: 11px; text-transform: uppercase; color: var(--text-muted); font-weight: 600; margin-bottom: 4px; }}
-    .stat-value {{ font-size: 20px; font-weight: 700; color: var(--navy); }}
-    .stat-sub {{ font-size: 12px; margin-top: 3px; font-weight: 600; }}
-    .stat-sub.positive {{ color: var(--green); }}
-    .stat-sub.negative {{ color: var(--red); }}
-    .container {{ max-width: 1200px; margin: 0 auto; padding: 0 16px; }}
-    .dragsec {{ background: var(--card-bg); border-radius: 12px; padding: 20px; margin-bottom: 18px; border: 1px solid var(--border-color); }}
-    .dragsec-head {{ display: flex; align-items: center; justify-content: space-between; border-bottom: 2px solid var(--light); padding-bottom: 10px; margin-bottom: 16px; }}
-    .dragsec-head h2 {{ font-family: Georgia, serif; font-size: 20px; color: var(--navy); font-weight: 700; }}
-    .drag-handle {{ background: var(--light); border: 1px solid var(--border-color); border-radius: 6px; padding: 4px 10px; font-size: 12px; color: var(--text-muted); }}
-    .about-card {{ font-size: 14.5px; line-height: 1.65; color: #2D3748; }}
-    .highlight {{ color: var(--accent); font-weight: 700; background: var(--accent-soft); padding: 2px 6px; border-radius: 4px; }}
-    .grid-2x2 {{ display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }}
-    .comp-card {{ background: var(--light); border-left: 6px solid var(--accent); padding: 15px; border-radius: 8px; }}
-    .comp-header {{ display: flex; justify-content: space-between; align-items: center; margin-bottom: 5px; }}
-    .comp-title {{ font-weight: 700; font-size: 15px; color: var(--navy); }}
-    .comp-rank {{ background: var(--accent); color: #FFFFFF; font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 12px; }}
-    .comp-share {{ font-size: 13px; color: var(--accent); font-weight: 600; margin-bottom: 5px; }}
-    .comp-desc {{ font-size: 13px; color: var(--text-muted); }}
-    .fund-top {{ display: flex; align-items: center; justify-content: space-between; background: var(--accent-soft); border-radius: 10px; padding: 16px; margin-bottom: 16px; }}
-    .mcap-large .val {{ font-family: Georgia, serif; font-size: 28px; font-weight: 700; color: var(--accent); display: block; }}
-    .mcap-large .lbl {{ font-size: 11px; text-transform: uppercase; color: var(--text-muted); font-weight: 600; }}
-    .fund-metrics-summary {{ display: flex; gap: 20px; }}
-    .metric-item {{ text-align: right; }}
-    .metric-item .v {{ font-size: 17px; font-weight: 700; color: var(--navy); }}
-    .metric-item .l {{ font-size: 11px; color: var(--text-muted); }}
-    .tables-grid {{ display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }}
-    .fund-table {{ width: 100%; border-collapse: collapse; border-radius: 8px; overflow: hidden; }}
-    .fund-table th {{ padding: 10px 12px; text-align: left; font-size: 13px; color: #FFFFFF; }}
-    .fund-table.last th {{ background: var(--navy); }}
-    .fund-table.next th {{ background: var(--accent); }}
-    .fund-table td {{ padding: 9px 12px; border-bottom: 1px solid var(--border-color); font-size: 13px; }}
-    .tech-grid {{ display: grid; grid-template-columns: 240px 1fr; gap: 16px; }}
-    .ath-box {{ background: var(--navy); color: #FFFFFF; border-radius: 10px; padding: 18px; display: flex; flex-direction: column; justify-content: center; text-align: center; }}
-    .ath-number {{ font-family: Georgia, serif; font-size: 46px; font-weight: 700; color: #FFFFFF; line-height: 1; margin-bottom: 8px; }}
-    .ath-details {{ font-size: 12.5px; color: #A0AEC0; line-height: 1.5; }}
-    .tech-bullets-card {{ background: #FFFFFF; border-left: 6px solid var(--accent); border-radius: 8px; padding: 16px; border: 1px solid var(--border-color); }}
-    .tech-bullets-card h3 {{ font-family: Georgia, serif; font-size: 16px; color: var(--navy); margin-bottom: 8px; }}
-    .tech-bullets-card ul {{ list-style: none; }}
-    .tech-bullets-card li {{ position: relative; padding-left: 16px; margin-bottom: 7px; font-size: 13px; color: #4A5568; }}
-    .tech-bullets-card li::before {{ content: "•"; color: var(--accent); font-size: 18px; position: absolute; left: 0; top: -3px; }}
-    .news-grid {{ display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }}
-    .news-card {{ background: #FFFFFF; border-top: 4px solid var(--accent); border-radius: 8px; padding: 14px; border: 1px solid var(--border-color); display: flex; flex-direction: column; justify-content: space-between; }}
-    .news-date {{ font-size: 10.5px; text-transform: uppercase; color: var(--text-muted); font-weight: 700; margin-bottom: 5px; }}
-    .news-tag-res {{ color: var(--accent); font-weight: 700; }}
-    .news-card h3 {{ font-family: Georgia, serif; font-size: 14.5px; color: var(--navy); margin-bottom: 7px; line-height: 1.3; }}
-    .news-card p {{ font-size: 12.5px; color: #4A5568; margin-bottom: 10px; }}
-    .news-link {{ font-size: 12.5px; font-weight: 700; color: var(--accent); text-decoration: none; }}
-    .flow-grid {{ display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }}
-    .flow-card {{ background: #FFFFFF; border: 1px solid var(--border-color); border-radius: 8px; padding: 16px; }}
-    .flow-header h3 {{ font-family: Georgia, serif; font-size: 16px; color: var(--navy); }}
-    .flow-header .sub {{ font-size: 11px; color: var(--text-muted); text-transform: uppercase; margin-bottom: 10px; }}
-    .flow-item {{ padding: 8px; background: var(--light); border-radius: 6px; font-size: 12px; margin-bottom: 7px; }}
-    .flow-item-top {{ display: flex; justify-content: space-between; align-items: center; margin-bottom: 3px; }}
-    .flow-name {{ font-weight: 700; color: var(--navy); }}
-    .tag-sell {{ background: var(--red-bg); color: var(--red); font-weight: 700; padding: 2px 6px; border-radius: 4px; font-size: 10px; }}
-    .tag-buy {{ background: var(--green-bg); color: var(--green); font-weight: 700; padding: 2px 6px; border-radius: 4px; font-size: 10px; }}
-    .tag-neutral {{ background: var(--gray-tag-bg); color: var(--gray-tag); font-weight: 700; padding: 2px 6px; border-radius: 4px; font-size: 10px; }}
-    .flow-empty {{ background: var(--light); border: 1px dashed var(--border-color); border-radius: 6px; padding: 20px; text-align: center; color: var(--text-muted); font-size: 13px; }}
-    .footer {{ max-width: 1200px; margin: 16px auto 0 auto; text-align: center; font-size: 12px; color: var(--text-muted); }}
-    @media (max-width: 768px) {{
-      .stat-strip {{ grid-template-columns: 1fr 1fr; }}
-      .grid-2x2, .tables-grid, .tech-grid, .news-grid, .flow-grid {{ grid-template-columns: 1fr; }}
-    }}
-  </style>
-</head>
-<body>
-  <header class="hero">
-    <div class="hero-container">
-      <div class="hero-header">
-        <div class="logo-box">
-          <img src="https://logo.clearbit.com/{dominio}" alt="{symbol}" onerror="this.style.display='none'; this.parentNode.innerText='{symbol}';">
-        </div>
-        <div class="hero-title-area">
-          <div class="hero-title-row">
-            <h1>{nombre_empresa}</h1>
-            <span class="ticker-badge">{exchange}: {symbol}</span>
-          </div>
-          <p class="hero-subtitle">Análisis fundamental y técnico en vivo • {sector} • {fecha_hoy}</p>
-        </div>
-      </div>
-
-      <div class="stat-strip">
-        <div class="stat-card">
-          <div class="stat-label">Precio Actual</div>
-          <div class="stat-value">${precio_act:.2f}</div>
-          <div class="stat-sub positive">Consenso: {rec_key}</div>
-        </div>
-        <div class="stat-card">
-          <div class="stat-label">Market Cap</div>
-          <div class="stat-value">{mcap}</div>
-          <div class="stat-sub">P/E Forward: {fwd_pe}</div>
-        </div>
-        <div class="stat-card">
-          <div class="stat-label">Crecimiento Ventas YoY</div>
-          <div class="stat-value">{rev_growth_str}</div>
-          <div class="stat-sub {rev_growth_cls}">Ingresos: {total_rev}</div>
-        </div>
-        <div class="stat-card">
-          <div class="stat-label">Beneficio Neto / ROE</div>
-          <div class="stat-value">{net_income}</div>
-          <div class="stat-sub positive">ROE: {roe_str}</div>
-        </div>
-        <div class="stat-card">
-          <div class="stat-label">Distancia a Máx 52s</div>
-          <div class="stat-value">{dist_ath:.1f}%</div>
-          <div class="stat-sub {dist_cls}">Máx 52s: ${high_52:.2f}</div>
-        </div>
-      </div>
-    </div>
-  </header>
-
-  <main class="container">
-    <section class="dragsec">
-      <div class="dragsec-head">
-        <h2>¿A qué se dedica {nombre_empresa}?</h2>
-        <span class="drag-handle">Perfil Corporativo</span>
-      </div>
-      <div class="about-card">
-        <span class="highlight">{sector} • {industria}</span> — {resumen}
-      </div>
-    </section>
-
-    <section class="dragsec">
-      <div class="dragsec-head">
-        <h2>Posición financiera y estructura</h2>
-        <span class="drag-handle">Balance</span>
-      </div>
-      <div class="grid-2x2">
-        <div class="comp-card">
-          <div class="comp-header">
-            <span class="comp-title">Márgenes de Rentabilidad</span>
-            <span class="comp-rank">Eficiencia</span>
-          </div>
-          <div class="comp-share">Margen Neto: {profit_margin} • Operativo: {op_margin}</div>
-          <p class="comp-desc">Capacidad de conversión de ingresos ({total_rev}) en utilidad neta ({net_income}) con un retorno sobre el patrimonio (ROE) de {roe_str}.</p>
-        </div>
-        <div class="comp-card">
-          <div class="comp-header">
-            <span class="comp-title">Solidez de Caja vs Deuda</span>
-            <span class="comp-rank">Balance</span>
-          </div>
-          <div class="comp-share">Caja Total: {total_cash} • Deuda Total: {total_debt}</div>
-          <p class="comp-desc">Posición de liquidez disponible para financiar crecimiento orgánico y operaciones globales ({pais} • {empleados} empleados).</p>
-        </div>
-      </div>
-    </section>
-
-    <section class="dragsec">
-      <div class="dragsec-head">
-        <h2>Datos fundamentales y valoración</h2>
-        <span class="drag-handle">Fundamentales</span>
-      </div>
-      <div class="fund-top">
-        <div class="mcap-large">
-          <span class="lbl">Capitalización de Mercado ({symbol})</span>
-          <span class="val">{mcap} USD</span>
-        </div>
-        <div class="fund-metrics-summary">
-          <div class="metric-item"><div class="v">{trail_pe}</div><div class="l">Trailing P/E</div></div>
-          <div class="metric-item"><div class="v">{fwd_pe}</div><div class="l">Forward P/E</div></div>
-          <div class="metric-item"><div class="v">{target_mean}</div><div class="l">Objetivo Analistas</div></div>
-        </div>
-      </div>
-
-      <div class="tables-grid">
-        <table class="fund-table last">
-          <thead><tr><th colspan="2">Métricas Actuales (TTM)</th></tr></thead>
-          <tbody>
-            <tr><td>Ingresos Totales (Revenue)</td><td><b>{total_rev}</b></td></tr>
-            <tr><td>Utilidad Neta (Net Income)</td><td><b>{net_income}</b></td></tr>
-            <tr><td>EPS (Últimos 12 meses)</td><td><b>{eps_trail}</b></td></tr>
-            <tr><td>Retorno sobre Patrimonio (ROE)</td><td><b>{roe_str}</b></td></tr>
-          </tbody>
-        </table>
-
-        <table class="fund-table next">
-          <thead><tr><th colspan="2">Consenso y Proyección de Analistas</th></tr></thead>
-          <tbody>
-            <tr><td>Recomendación Consenso</td><td><b>{rec_key}</b></td></tr>
-            <tr><td>EPS Estimado (Forward)</td><td><b>{eps_fwd}</b></td></tr>
-            <tr><td>Precio Objetivo Medio</td><td><b>{target_mean}</b></td></tr>
-            <tr><td>Rango Objetivos (Mín – Máx)</td><td><b>{target_low} – {target_high}</b></td></tr>
-          </tbody>
-        </table>
-      </div>
-    </section>
-
-    <section class="dragsec">
-      <div class="dragsec-head">
-        <h2>Análisis técnico — Distancia a máximos 52 semanas</h2>
-        <span class="drag-handle">Niveles</span>
-      </div>
-      <div class="tech-grid">
-        <div class="ath-box">
-          <div class="ath-number">{dist_ath:.1f}%</div>
-          <div class="ath-details">
-            Máximo 52 Semanas: <b>${high_52:.2f} USD</b><br>
-            Cotización Actual: <b>${precio_act:.2f} USD</b><br>
-            Mínimo 52 Semanas: <b>${low_52:.2f} USD</b>
-          </div>
-        </div>
-        <div class="tech-bullets-card">
-          <h3>Estructura de Precios ({symbol})</h3>
-          <ul>
-            <li><b>Rango anual:</b> El activo cotiza entre un soporte anual de <b>${low_52:.2f}</b> y una resistencia máxima de <b>${high_52:.2f}</b>.</li>
-            <li><b>Objetivo institucional:</b> El consenso de analistas proyecta un valor razonable medio de <b>{target_mean}</b> (máximo estimado en <b>{target_high}</b>).</li>
-            <li><b>Sincronización multi-pestaña:</b> Puede contrastar estos niveles fundamentales con el gráfico interactivo de TradingView (Pestaña 1) y la proyección Monte Carlo (Pestaña 2).</li>
-          </ul>
-        </div>
-      </div>
-    </section>
-
-    <section class="dragsec">
-      <div class="dragsec-head">
-        <h2>Últimas noticias ({symbol})</h2>
-        <span class="drag-handle">Noticias</span>
-      </div>
-      <div class="news-grid">{news_cards_html}</div>
-    </section>
-
-    <section class="dragsec">
-      <div class="dragsec-head">
-        <h2>Insider trading — Movimientos de directivos</h2>
-        <span class="drag-handle">SEC Form 4</span>
-      </div>
-      <div class="flow-grid">
-        <div class="flow-card">
-          <div class="flow-header">
-            <h3>Transacciones recientes de ejecutivos</h3>
-            <div class="sub">Registros SEC Form 4 • {symbol}</div>
-          </div>
-          {insider_html}
-        </div>
-        <div class="flow-card">
-          <div class="flow-header">
-            <h3>Resumen de consenso institucional</h3>
-            <div class="sub">Valoración y cobertura</div>
-          </div>
-          <div class="flow-empty">
-            Calificación actual del consenso: <b>{rec_key}</b><br><br>
-            Precio Objetivo Medio: <b>{target_mean}</b> vs Precio Actual: <b>${precio_act:.2f}</b>
-          </div>
-        </div>
-      </div>
-    </section>
-  </main>
-
-  <footer class="footer">
-    Informe Fundamental Dinámico generado en tiempo real para {nombre_empresa} ({symbol}) • Fuentes: Yahoo Finance & SEC Filings
-  </footer>
-</body>
-</html>
-"""
+    resultado = PLANTILLA_HTML_REPORTE
+    for k, v in reemplazos.items():
+        resultado = resultado.replace(k, str(v))
+    return resultado
 
 # ==============================================================================
 # 3. EJECUCIÓN PRINCIPAL
