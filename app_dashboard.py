@@ -95,7 +95,6 @@ BRAND_THEMES = {
 def obtener_colores_marca(symbol):
     if symbol in BRAND_THEMES:
         return BRAND_THEMES[symbol]
-    # Genera un tono corporativo consistente para cualquier otro ticker
     paletas = [
         {"navy": "#0F172A", "accent": "#2563EB", "soft": "#EFF6FF"},
         {"navy": "#111827", "accent": "#059669", "soft": "#ECFDF5"},
@@ -284,7 +283,7 @@ def widget_tradingview_html(symbol, tv_interval="D", theme="light", height=520):
 </body>
 </html>"""
 
-PLANTILLA_HTML_REPORTE = '''<!DOCTYPE html>
+PLANTILLA_HTML_REPORTE = """<!DOCTYPE html>
 <html lang="es">
 <head>
   <meta charset="UTF-8">
@@ -315,18 +314,4 @@ PLANTILLA_HTML_REPORTE = '''<!DOCTYPE html>
       border: 1.5px solid var(--accent); color: #FFFFFF; padding: 4px 12px;
       border-radius: 20px; font-size: 14px; font-weight: 700; background: var(--accent);
     }
-    .hero-subtitle { color: #CBD5E0; font-size: 14px; margin-top: 5px; }
-    .stat-strip { display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px; margin-top: 16px; }
-    .stat-card { background-color: #FFFFFF; color: var(--text-dark); padding: 13px; border-radius: 10px; border-left: 4px solid var(--accent); }
-    .stat-label { font-size: 11px; text-transform: uppercase; color: var(--text-muted); font-weight: 600; margin-bottom: 4px; }
-    .stat-value { font-size: 20px; font-weight: 700; color: var(--navy); }
-    .stat-sub { font-size: 12px; margin-top: 3px; font-weight: 600; }
-    .stat-sub.positive { color: var(--green); }
-    .stat-sub.negative { color: var(--red); }
-    .container { max-width: 1200px; margin: 0 auto; padding: 0 16px; }
-    .dragsec { background: var(--card-bg); border-radius: 12px; padding: 20px; margin-bottom: 18px; border: 1px solid var(--border-color); }
-    .dragsec-head { display: flex; align-items: center; justify-content: space-between; border-bottom: 2px solid var(--light); padding-bottom: 10px; margin-bottom: 16px; }
-    .dragsec-head h2 { font-family: Georgia, serif; font-size: 20px; color: var(--navy); font-weight: 700; }
-    .drag-handle { background: var(--accent-soft); border: 1px solid var(--accent); border-radius: 6px; padding: 4px 10px; font-size: 12px; color: var(--accent); font-weight: 700; }
-    .about-card { font-size: 14.5px; line-height: 1.65; color: #2D3748; }
-    .highlight { color: var
+    .hero-subtitle { color:
