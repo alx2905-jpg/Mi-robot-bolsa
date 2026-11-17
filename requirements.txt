@@ -3,6 +3,7 @@ yfinance
 numpy
 pandas
 matplotlib
+plotly
 scipy
 scikit-learn
 openpyxl
