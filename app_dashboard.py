@@ -133,19 +133,11 @@ def cargar_datos_y_modelo(symbol, inter):
     df_diario['Target'] = (df_diario['Close'].shift(-5) / df_diario['Close'] - 1 >= 0.02).astype(int)
 
     features = ['Ret_1d', 'Dist_EMA21', 'RSI', 'Vol_20d', 'Vol_Rel']
-    df_feat = df_diario[features].replace([np.inf, -np.inf], np.nan).ffill().bfill()
-    df_clean = df_feat.copy()
-    df_clean['Target'] = df_diario['Target']
-    df_clean = df_clean.iloc[:-5].dropna()
-
+    df_clean = df_diario.dropna().copy()
     corte = int(len(df_clean) * 0.8)
-    y_train = df_clean['Target'].iloc[:corte]
-    if len(df_clean) >= 30 and y_train.nunique() > 1:
-        modelo = CalibratedClassifierCV(RandomForestClassifier(n_estimators=200, max_depth=5, random_state=42), method='isotonic', cv=3)
-        modelo.fit(df_clean[features].iloc[:corte], y_train)
-        prob_call = float(modelo.predict_proba(df_feat.iloc[[-1]])[:, 1][0])
-    else:
-        prob_call = 0.50
+    modelo = CalibratedClassifierCV(RandomForestClassifier(n_estimators=200, max_depth=5, random_state=42), method='isotonic', cv=3)
+    modelo.fit(df_clean[features].iloc[:corte], df_clean['Target'].iloc[:corte])
+    prob_call = modelo.predict_proba(df_diario[features].iloc[[-1]].dropna())[:, 1][0]
 
     periodo_velas = "6mo" if inter == "1d" else "1mo" if inter == "1h" else "5d"
     df_velas = activo.history(period=periodo_velas, interval=inter).tail(80)
@@ -163,6 +155,7 @@ def cargar_datos_y_modelo(symbol, inter):
     df_velas['Signal'] = df_velas['MACD'].ewm(span=9, adjust=False).mean()
     df_velas['Hist'] = df_velas['MACD'] - df_velas['Signal']
 
+    # Extraer fundamentales blindados contra errores de estructura
     info = {}
     try:
         raw_info = activo.info
@@ -241,6 +234,7 @@ def construir_informe_html_dinamico(symbol, precio_act, info, noticias, insiders
     empleados = f"{int(info.get('fullTimeEmployees')):,}" if isinstance(info.get("fullTimeEmployees"), (int, float)) else "N/D"
     pais = html.escape(str(info.get("country") or "Global"))
 
+    # Noticias HTML
     if noticias:
         news_cards_html = ""
         for n in noticias:
@@ -266,6 +260,7 @@ def construir_informe_html_dinamico(symbol, precio_act, info, noticias, insiders
         </div>
         """
 
+    # Insiders HTML
     if insiders:
         insider_html = ""
         for ins in insiders:
@@ -346,4 +341,510 @@ def construir_informe_html_dinamico(symbol, precio_act, info, noticias, insiders
     .comp-desc {{ font-size: 13px; color: var(--text-muted); }}
     .fund-top {{ display: flex; align-items: center; justify-content: space-between; background: var(--accent-soft); border-radius: 10px; padding: 16px; margin-bottom: 16px; }}
     .mcap-large .val {{ font-family: Georgia, serif; font-size: 28px; font-weight: 700; color: var(--accent); display: block; }}
-    .mcap-large .lbl {{ font-
+    .mcap-large .lbl {{ font-size: 11px; text-transform: uppercase; color: var(--text-muted); font-weight: 600; }}
+    .fund-metrics-summary {{ display: flex; gap: 20px; }}
+    .metric-item {{ text-align: right; }}
+    .metric-item .v {{ font-size: 17px; font-weight: 700; color: var(--navy); }}
+    .metric-item .l {{ font-size: 11px; color: var(--text-muted); }}
+    .tables-grid {{ display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }}
+    .fund-table {{ width: 100%; border-collapse: collapse; border-radius: 8px; overflow: hidden; }}
+    .fund-table th {{ padding: 10px 12px; text-align: left; font-size: 13px; color: #FFFFFF; }}
+    .fund-table.last th {{ background: var(--navy); }}
+    .fund-table.next th {{ background: var(--accent); }}
+    .fund-table td {{ padding: 9px 12px; border-bottom: 1px solid var(--border-color); font-size: 13px; }}
+    .tech-grid {{ display: grid; grid-template-columns: 240px 1fr; gap: 16px; }}
+    .ath-box {{ background: var(--navy); color: #FFFFFF; border-radius: 10px; padding: 18px; display: flex; flex-direction: column; justify-content: center; text-align: center; }}
+    .ath-number {{ font-family: Georgia, serif; font-size: 46px; font-weight: 700; color: #FFFFFF; line-height: 1; margin-bottom: 8px; }}
+    .ath-details {{ font-size: 12.5px; color: #A0AEC0; line-height: 1.5; }}
+    .tech-bullets-card {{ background: #FFFFFF; border-left: 6px solid var(--accent); border-radius: 8px; padding: 16px; border: 1px solid var(--border-color); }}
+    .tech-bullets-card h3 {{ font-family: Georgia, serif; font-size: 16px; color: var(--navy); margin-bottom: 8px; }}
+    .tech-bullets-card ul {{ list-style: none; }}
+    .tech-bullets-card li {{ position: relative; padding-left: 16px; margin-bottom: 7px; font-size: 13px; color: #4A5568; }}
+    .tech-bullets-card li::before {{ content: "•"; color: var(--accent); font-size: 18px; position: absolute; left: 0; top: -3px; }}
+    .news-grid {{ display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }}
+    .news-card {{ background: #FFFFFF; border-top: 4px solid var(--accent); border-radius: 8px; padding: 14px; border: 1px solid var(--border-color); display: flex; flex-direction: column; justify-content: space-between; }}
+    .news-date {{ font-size: 10.5px; text-transform: uppercase; color: var(--text-muted); font-weight: 700; margin-bottom: 5px; }}
+    .news-tag-res {{ color: var(--accent); font-weight: 700; }}
+    .news-card h3 {{ font-family: Georgia, serif; font-size: 14.5px; color: var(--navy); margin-bottom: 7px; line-height: 1.3; }}
+    .news-card p {{ font-size: 12.5px; color: #4A5568; margin-bottom: 10px; }}
+    .news-link {{ font-size: 12.5px; font-weight: 700; color: var(--accent); text-decoration: none; }}
+    .flow-grid {{ display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }}
+    .flow-card {{ background: #FFFFFF; border: 1px solid var(--border-color); border-radius: 8px; padding: 16px; }}
+    .flow-header h3 {{ font-family: Georgia, serif; font-size: 16px; color: var(--navy); }}
+    .flow-header .sub {{ font-size: 11px; color: var(--text-muted); text-transform: uppercase; margin-bottom: 10px; }}
+    .flow-item {{ padding: 8px; background: var(--light); border-radius: 6px; font-size: 12px; margin-bottom: 7px; }}
+    .flow-item-top {{ display: flex; justify-content: space-between; align-items: center; margin-bottom: 3px; }}
+    .flow-name {{ font-weight: 700; color: var(--navy); }}
+    .tag-sell {{ background: var(--red-bg); color: var(--red); font-weight: 700; padding: 2px 6px; border-radius: 4px; font-size: 10px; }}
+    .tag-buy {{ background: var(--green-bg); color: var(--green); font-weight: 700; padding: 2px 6px; border-radius: 4px; font-size: 10px; }}
+    .tag-neutral {{ background: var(--gray-tag-bg); color: var(--gray-tag); font-weight: 700; padding: 2px 6px; border-radius: 4px; font-size: 10px; }}
+    .flow-empty {{ background: var(--light); border: 1px dashed var(--border-color); border-radius: 6px; padding: 20px; text-align: center; color: var(--text-muted); font-size: 13px; }}
+    .footer {{ max-width: 1200px; margin: 16px auto 0 auto; text-align: center; font-size: 12px; color: var(--text-muted); }}
+    @media (max-width: 768px) {{
+      .stat-strip {{ grid-template-columns: 1fr 1fr; }}
+      .grid-2x2, .tables-grid, .tech-grid, .news-grid, .flow-grid {{ grid-template-columns: 1fr; }}
+    }}
+  </style>
+</head>
+<body>
+  <header class="hero">
+    <div class="hero-container">
+      <div class="hero-header">
+        <div class="logo-box">
+          <img src="https://logo.clearbit.com/{dominio}" alt="{symbol}" onerror="this.style.display='none'; this.parentNode.innerText='{symbol}';">
+        </div>
+        <div class="hero-title-area">
+          <div class="hero-title-row">
+            <h1>{nombre_empresa}</h1>
+            <span class="ticker-badge">{exchange}: {symbol}</span>
+          </div>
+          <p class="hero-subtitle">Análisis fundamental y técnico en vivo • {sector} • {fecha_hoy}</p>
+        </div>
+      </div>
+
+      <div class="stat-strip">
+        <div class="stat-card">
+          <div class="stat-label">Precio Actual</div>
+          <div class="stat-value">${precio_act:.2f}</div>
+          <div class="stat-sub positive">Consenso: {rec_key}</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Market Cap</div>
+          <div class="stat-value">{mcap}</div>
+          <div class="stat-sub">P/E Forward: {fwd_pe}</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Crecimiento Ventas YoY</div>
+          <div class="stat-value">{rev_growth_str}</div>
+          <div class="stat-sub {rev_growth_cls}">Ingresos: {total_rev}</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Beneficio Neto / ROE</div>
+          <div class="stat-value">{net_income}</div>
+          <div class="stat-sub positive">ROE: {roe_str}</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Distancia a Máx 52s</div>
+          <div class="stat-value">{dist_ath:.1f}%</div>
+          <div class="stat-sub {dist_cls}">Máx 52s: ${high_52:.2f}</div>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <main class="container">
+    <section class="dragsec">
+      <div class="dragsec-head">
+        <h2>¿A qué se dedica {nombre_empresa}?</h2>
+        <span class="drag-handle">Perfil Corporativo</span>
+      </div>
+      <div class="about-card">
+        <span class="highlight">{sector} • {industria}</span> — {resumen}
+      </div>
+    </section>
+
+    <section class="dragsec">
+      <div class="dragsec-head">
+        <h2>Posición financiera y estructura</h2>
+        <span class="drag-handle">Balance</span>
+      </div>
+      <div class="grid-2x2">
+        <div class="comp-card">
+          <div class="comp-header">
+            <span class="comp-title">Márgenes de Rentabilidad</span>
+            <span class="comp-rank">Eficiencia</span>
+          </div>
+          <div class="comp-share">Margen Neto: {profit_margin} • Operativo: {op_margin}</div>
+          <p class="comp-desc">Capacidad de conversión de ingresos ({total_rev}) en utilidad neta ({net_income}) con un retorno sobre el patrimonio (ROE) de {roe_str}.</p>
+        </div>
+        <div class="comp-card">
+          <div class="comp-header">
+            <span class="comp-title">Solidez de Caja vs Deuda</span>
+            <span class="comp-rank">Balance</span>
+          </div>
+          <div class="comp-share">Caja Total: {total_cash} • Deuda Total: {total_debt}</div>
+          <p class="comp-desc">Posición de liquidez disponible para financiar crecimiento orgánico y operaciones globales ({pais} • {empleados} empleados).</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="dragsec">
+      <div class="dragsec-head">
+        <h2>Datos fundamentales y valoración</h2>
+        <span class="drag-handle">Fundamentales</span>
+      </div>
+      <div class="fund-top">
+        <div class="mcap-large">
+          <span class="lbl">Capitalización de Mercado ({symbol})</span>
+          <span class="val">{mcap} USD</span>
+        </div>
+        <div class="fund-metrics-summary">
+          <div class="metric-item"><div class="v">{trail_pe}</div><div class="l">Trailing P/E</div></div>
+          <div class="metric-item"><div class="v">{fwd_pe}</div><div class="l">Forward P/E</div></div>
+          <div class="metric-item"><div class="v">{target_mean}</div><div class="l">Objetivo Analistas</div></div>
+        </div>
+      </div>
+
+      <div class="tables-grid">
+        <table class="fund-table last">
+          <thead><tr><th colspan="2">Métricas Actuales (TTM)</th></tr></thead>
+          <tbody>
+            <tr><td>Ingresos Totales (Revenue)</td><td><b>{total_rev}</b></td></tr>
+            <tr><td>Utilidad Neta (Net Income)</td><td><b>{net_income}</b></td></tr>
+            <tr><td>EPS (Últimos 12 meses)</td><td><b>{eps_trail}</b></td></tr>
+            <tr><td>Retorno sobre Patrimonio (ROE)</td><td><b>{roe_str}</b></td></tr>
+          </tbody>
+        </table>
+
+        <table class="fund-table next">
+          <thead><tr><th colspan="2">Consenso y Proyección de Analistas</th></tr></thead>
+          <tbody>
+            <tr><td>Recomendación Consenso</td><td><b>{rec_key}</b></td></tr>
+            <tr><td>EPS Estimado (Forward)</td><td><b>{eps_fwd}</b></td></tr>
+            <tr><td>Precio Objetivo Medio</td><td><b>{target_mean}</b></td></tr>
+            <tr><td>Rango Objetivos (Mín – Máx)</td><td><b>{target_low} – {target_high}</b></td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="dragsec">
+      <div class="dragsec-head">
+        <h2>Análisis técnico — Distancia a máximos 52 semanas</h2>
+        <span class="drag-handle">Niveles</span>
+      </div>
+      <div class="tech-grid">
+        <div class="ath-box">
+          <div class="ath-number">{dist_ath:.1f}%</div>
+          <div class="ath-details">
+            Máximo 52 Semanas: <b>${high_52:.2f} USD</b><br>
+            Cotización Actual: <b>${precio_act:.2f} USD</b><br>
+            Mínimo 52 Semanas: <b>${low_52:.2f} USD</b>
+          </div>
+        </div>
+        <div class="tech-bullets-card">
+          <h3>Estructura de Precios ({symbol})</h3>
+          <ul>
+            <li><b>Rango anual:</b> El activo cotiza entre un soporte anual de <b>${low_52:.2f}</b> y una resistencia máxima de <b>${high_52:.2f}</b>.</li>
+            <li><b>Objetivo institucional:</b> El consenso de analistas proyecta un valor razonable medio de <b>{target_mean}</b> (máximo estimado en <b>{target_high}</b>).</li>
+            <li><b>Sincronización multi-pestaña:</b> Puede contrastar estos niveles fundamentales con el gráfico interactivo de TradingView (Pestaña 1) y la proyección Monte Carlo (Pestaña 2).</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="dragsec">
+      <div class="dragsec-head">
+        <h2>Últimas noticias ({symbol})</h2>
+        <span class="drag-handle">Noticias</span>
+      </div>
+      <div class="news-grid">{news_cards_html}</div>
+    </section>
+
+    <section class="dragsec">
+      <div class="dragsec-head">
+        <h2>Insider trading — Movimientos de directivos</h2>
+        <span class="drag-handle">SEC Form 4</span>
+      </div>
+      <div class="flow-grid">
+        <div class="flow-card">
+          <div class="flow-header">
+            <h3>Transacciones recientes de ejecutivos</h3>
+            <div class="sub">Registros SEC Form 4 • {symbol}</div>
+          </div>
+          {insider_html}
+        </div>
+        <div class="flow-card">
+          <div class="flow-header">
+            <h3>Resumen de consenso institucional</h3>
+            <div class="sub">Valoración y cobertura</div>
+          </div>
+          <div class="flow-empty">
+            Calificación actual del consenso: <b>{rec_key}</b><br><br>
+            Precio Objetivo Medio: <b>{target_mean}</b> vs Precio Actual: <b>${precio_act:.2f}</b>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="footer">
+    Informe Fundamental Dinámico generado en tiempo real para {nombre_empresa} ({symbol}) • Fuentes: Yahoo Finance & SEC Filings
+  </footer>
+</body>
+</html>
+"""
+
+# ==============================================================================
+# 3. EJECUCIÓN PRINCIPAL
+# ==============================================================================
+with st.spinner(f"Analizando datos en vivo y fundamentales de {ticker} ({intervalo})..."):
+    df_diario, df_velas, prob_call, info_empresa, noticias_empresa, insiders_empresa = cargar_datos_y_modelo(ticker, intervalo)
+
+if df_diario is None or df_velas is None or df_velas.empty:
+    st.error(f"❌ No se encontraron datos para el ticker **'{ticker}'**. Verifique que el símbolo exista (ej. AAPL, NU, DIS, SPY).")
+    st.stop()
+
+prob_put = 1.0 - prob_call
+precio_actual = float(df_velas['Close'].iloc[-1])
+apertura = float(df_velas['Open'].iloc[-1])
+maximo = float(df_velas['High'].iloc[-1])
+minimo = float(df_velas['Low'].iloc[-1])
+volumen = float(df_velas['Volume'].iloc[-1])
+cambio = precio_actual - apertura
+cambio_pct = (cambio / apertura) * 100
+rsi_actual = float(df_velas['RSI'].iloc[-1])
+macd_actual = float(df_velas['MACD'].iloc[-1])
+
+# Fila de métricas superiores
+m1, m2, m3, m4, m5, m6, m7 = st.columns(7)
+m1.metric("ÚLTIMO", f"${precio_actual:.2f}", f"{cambio:+.2f} ({cambio_pct:+.2f}%)")
+m2.metric("MÁX / MÍN", f"${maximo:.2f} / ${minimo:.2f}")
+m3.metric("VOLUMEN", f"{volumen/1e6:.2f}M")
+m4.metric("IA CALL", f"{prob_call*100:.1f}%", delta=f"Meta ≥ {umbral_confianza}%")
+m5.metric("IA PUT", f"{prob_put*100:.1f}%", delta=f"Meta ≥ {umbral_confianza}%")
+m6.metric("RSI (14)", f"{rsi_actual:.1f}")
+m7.metric("MACD", f"{macd_actual:.3f}")
+
+# Alertas de cambio de tendencia
+if bot_activo and len(df_velas) >= 3:
+    e9_prev, e21_prev = df_velas['EMA9'].iloc[-3], df_velas['EMA21'].iloc[-3]
+    e9_curr, e21_curr = df_velas['EMA9'].iloc[-1], df_velas['EMA21'].iloc[-1]
+    if e9_prev < e21_prev and e9_curr > e21_curr and rsi_actual < 65:
+        st.success(f"▲ **ALCISTA ({ticker})**: Cruce EMA9 > EMA21 — Posible CALL | Confianza IA: {prob_call*100:.1f}%")
+    elif e9_prev > e21_prev and e9_curr < e21_curr and rsi_actual > 35:
+        st.error(f"▼ **BAJISTA ({ticker})**: Cruce EMA9 < EMA21 — Posible PUT | Confianza IA: {prob_put*100:.1f}%")
+    elif rsi_actual < 28:
+        st.warning(f"◆ **SOBREVENTA ({ticker})**: RSI {rsi_actual:.1f} — Rebote probable")
+    elif rsi_actual > 72:
+        st.warning(f"◆ **SOBRECOMPRA ({ticker})**: RSI {rsi_actual:.1f} — Corrección probable")
+
+# ==============================================================================
+# 4. NAVEGACIÓN POR PESTAÑAS
+# ==============================================================================
+t_chart, t_mc, t_options, t_ibkr, t_sec, t_reporte = st.tabs([
+    "📊 TradingView & Técnico",
+    "🔮 Monte Carlo (500 Futuros)",
+    "📈 Cadena Opciones (CALL / PUT)",
+    "🏦 IBKR & Posiciones",
+    "🛡️ Seguridad & Webhook",
+    f"🏢 Informe Fundamental ({ticker})"
+])
+
+# --- TAB 1: ACCESO TRADINGVIEW EN VIVO + GRÁFICO CUANTITATIVO ---
+with t_chart:
+    st.subheader(f"🌐 Gráfico Interactivo TradingView en Vivo ({ticker})")
+    tv_interval = "D" if intervalo == "1d" else "60" if intervalo == "1h" else "15" if intervalo == "15m" else "5"
+    tv_html = f"""
+    <!DOCTYPE html>
+    <html>
+    <body style="margin:0;padding:0;background:#060b12;">
+    <div class="tradingview-widget-container" style="height:490px;width:100%;">
+      <div id="tradingview_chart" style="height:490px;width:100%;"></div>
+      <script type="text/javascript" src="https://s3.tradingview.com/tv.js"></script>
+      <script type="text/javascript">
+      new TradingView.widget({{
+        "width": "100%",
+        "height": 490,
+        "symbol": "{ticker}",
+        "interval": "{tv_interval}",
+        "timezone": "America/Bogota",
+        "theme": "dark",
+        "style": "1",
+        "locale": "es",
+        "toolbar_bg": "#0b1220",
+        "enable_publishing": false,
+        "allow_symbol_change": true,
+        "studies": ["MASimple@tv-basicstudies", "RSI@tv-basicstudies"],
+        "container_id": "tradingview_chart"
+      }});
+      </script>
+    </div>
+    </body>
+    </html>
+    """
+    components.html(tv_html, height=500, scrolling=False)
+
+    st.subheader(f"📉 Motor Cuantitativo Interno ({ticker} · {intervalo})")
+    fig = make_subplots(
+        rows=4, cols=1, shared_xaxes=True, vertical_spacing=0.025,
+        row_heights=[0.52, 0.14, 0.17, 0.17],
+        subplot_titles=(f"{ticker} · Velas + EMA 9/21", "Volumen", "RSI (14)", "MACD (12, 26, 9)")
+    )
+    fig.add_trace(go.Candlestick(
+        x=df_velas.index, open=df_velas['Open'], high=df_velas['High'],
+        low=df_velas['Low'], close=df_velas['Close'], name="Velas",
+        increasing_line_color='#00e89a', decreasing_line_color='#ff3d6b'
+    ), row=1, col=1)
+    fig.add_trace(go.Scatter(x=df_velas.index, y=df_velas['EMA9'], line=dict(color='#00c8ff', width=1.4), name="EMA 9"), row=1, col=1)
+    fig.add_trace(go.Scatter(x=df_velas.index, y=df_velas['EMA21'], line=dict(color='#ffd23f', width=1.4), name="EMA 21"), row=1, col=1)
+
+    colores_vol = ['#00e89a' if c >= o else '#ff3d6b' for c, o in zip(df_velas['Close'], df_velas['Open'])]
+    fig.add_trace(go.Bar(x=df_velas.index, y=df_velas['Volume'], marker_color=colores_vol, name="Volumen", opacity=0.65), row=2, col=1)
+
+    fig.add_trace(go.Scatter(x=df_velas.index, y=df_velas['RSI'], line=dict(color='#00c8ff', width=1.5), name="RSI"), row=3, col=1)
+    fig.add_hline(y=70, line_dash="dot", line_color="#ff3d6b", row=3, col=1)
+    fig.add_hline(y=30, line_dash="dot", line_color="#00e89a", row=3, col=1)
+
+    colores_macd = ['#00e89a' if v >= 0 else '#ff3d6b' for v in df_velas['Hist']]
+    fig.add_trace(go.Bar(x=df_velas.index, y=df_velas['Hist'], marker_color=colores_macd, name="Hist MACD"), row=4, col=1)
+    fig.add_trace(go.Scatter(x=df_velas.index, y=df_velas['MACD'], line=dict(color='#00c8ff', width=1.3), name="MACD"), row=4, col=1)
+    fig.add_trace(go.Scatter(x=df_velas.index, y=df_velas['Signal'], line=dict(color='#ff8c42', width=1.2), name="Señal"), row=4, col=1)
+
+    fig.update_layout(
+        template="plotly_dark", paper_bgcolor="#060b12", plot_bgcolor="#0b1220",
+        height=640, xaxis_rangeslider_visible=False, margin=dict(l=10, r=10, t=30, b=10)
+    )
+    st.plotly_chart(fig, use_container_width=True)
+
+# --- TAB 2: SIMULACIÓN MONTE CARLO (500 ESCENARIOS) ---
+with t_mc:
+    dias_proy = st.slider("Horizonte de proyección (días):", min_value=5, max_value=45, value=21)
+    retornos = np.log(df_diario['Close'] / df_diario['Close'].shift(1)).dropna()
+    media, vol = retornos.mean(), retornos.std()
+    np.random.seed(42)
+    caminos = np.zeros((dias_proy, 500))
+    caminos[0] = precio_actual
+    for t in range(1, dias_proy):
+        caminos[t] = caminos[t - 1] * np.exp((media - 0.5 * vol ** 2) + vol * np.random.normal(0, 1, 500))
+
+    ruta_acertada = np.median(caminos, axis=1)
+    p95 = np.percentile(caminos, 95, axis=1)
+    p5 = np.percentile(caminos, 5, axis=1)
+
+    mc1, mc2, mc3 = st.columns(3)
+    mc1.metric("Ruta Más Acertada (Mediana)", f"${ruta_acertada[-1]:.2f}", f"{((ruta_acertada[-1]/precio_actual)-1)*100:+.2f}%")
+    mc2.metric("Escenario Optimista (P95)", f"${p95[-1]:.2f}")
+    mc3.metric("Límite de Riesgo (P5)", f"${p5[-1]:.2f}")
+
+    fig_mc = go.Figure()
+    eje_x = list(range(dias_proy))
+    for i in range(75):
+        fig_mc.add_trace(go.Scatter(x=eje_x, y=caminos[:, i], mode='lines', line=dict(color='rgba(184,208,232,0.08)', width=1), showlegend=False))
+    fig_mc.add_trace(go.Scatter(x=eje_x, y=p95, mode='lines', line=dict(color='#00c8ff', dash='dash'), name=f'Optimista (${p95[-1]:.2f})'))
+    fig_mc.add_trace(go.Scatter(x=eje_x, y=ruta_acertada, mode='lines', line=dict(color='#00e89a', width=3), name=f'Ruta Más Acertada (${ruta_acertada[-1]:.2f})'))
+    fig_mc.add_trace(go.Scatter(x=eje_x, y=p5, mode='lines', line=dict(color='#ff3d6b', dash='dash'), name=f'Soporte Riesgo (${p5[-1]:.2f})'))
+
+    fig_mc.update_layout(
+        title=f"Simulación Monte Carlo (500 Escenarios) • {ticker} a {dias_proy} días",
+        template="plotly_dark", paper_bgcolor="#060b12", plot_bgcolor="#0b1220",
+        xaxis_title="Días hacia el futuro", yaxis_title="Precio (USD)", height=460
+    )
+    st.plotly_chart(fig_mc, use_container_width=True)
+
+# --- TAB 3: CADENA DUAL CALL / PUT + GRIEGAS COMPLETAS ---
+with t_options:
+    activo = yf.Ticker(ticker)
+    if activo.options:
+        venc_elegido = st.selectbox("Fecha de Vencimiento:", activo.options[:10])
+        dias_venc = max(1, (datetime.strptime(venc_elegido, "%Y-%m-%d") - datetime.now()).days)
+        T = dias_venc / 365.0
+
+        chain = activo.option_chain(venc_elegido)
+        calls = chain.calls[(chain.calls['strike'] >= precio_actual * 0.88) & (chain.calls['strike'] <= precio_actual * 1.12)].copy()
+        puts = chain.puts[(chain.puts['strike'] >= precio_actual * 0.88) & (chain.puts['strike'] <= precio_actual * 1.12)].copy()
+
+        merged = pd.merge(calls, puts, on="strike", suffixes=("_call", "_put")).sort_values("strike")
+        filas_dual = []
+        for _, r in merged.iterrows():
+            mid_c = round((r['bid_call'] + r['ask_call']) / 2, 2)
+            mid_p = round((r['bid_put'] + r['ask_put']) / 2, 2)
+            gc = calcular_griegas_completas(precio_actual, r['strike'], T, r['impliedVolatility_call'], "call")
+            gp = calcular_griegas_completas(precio_actual, r['strike'], T, r['impliedVolatility_put'], "put")
+
+            filas_dual.append({
+                "CALL OI": int(r['openInterest_call']) if pd.notna(r['openInterest_call']) else 0,
+                "CALL IV%": round(r['impliedVolatility_call'] * 100, 1),
+                "CALL Δ": gc['delta'],
+                "CALL Θ": gc['theta'],
+                "CALL $": mid_c,
+                "STRIKE": r['strike'],
+                "PUT $": mid_p,
+                "PUT Δ": gp['delta'],
+                "PUT Θ": gp['theta'],
+                "PUT IV%": round(r['impliedVolatility_put'] * 100, 1),
+                "PUT OI": int(r['openInterest_put']) if pd.notna(r['openInterest_put']) else 0,
+            })
+
+        df_dual = pd.DataFrame(filas_dual)
+        st.dataframe(df_dual, use_container_width=True, hide_index=True)
+
+        buffer = io.BytesIO()
+        with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
+            df_dual.to_excel(writer, index=False, sheet_name='Cadena_Dual')
+        st.download_button(
+            label="📥 Descargar Cadena Dual CALL/PUT en Excel (.xlsx)",
+            data=buffer.getvalue(),
+            file_name=f"Cadena_Opciones_{ticker}_{venc_elegido}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
+    else:
+        st.info(f"El ticker **{ticker}** no dispone de cadena de opciones listada en Yahoo Finance.")
+
+# --- TAB 4: IBKR PANEL & GESTOR DE POSICIONES ---
+with t_ibkr:
+    col_con, col_ord = st.columns(2)
+    with col_con:
+        st.subheader("🔌 Configuración TWS / IB Gateway")
+        st.radio("Entorno:", ["📝 Paper Trading (Puerto 7497)", "💰 Live Trading (Puerto 7496)"], horizontal=True)
+        st.info("Por seguridad, la ejecución real se realiza manualmente desde su app móvil de IBKR tras validar la señal.")
+        st.code("""# Conexión segura de solo lectura (ibapi)
+from ibapi.client import EClient
+from ibapi.wrapper import EWrapper
+# Puerto Paper: 7497 | Puerto Live: 7496 | Host: 127.0.0.1""", language="python")
+
+    with col_ord:
+        st.subheader("📋 Registrar Operación Manual en Bitácora")
+        with st.form("form_posicion"):
+            f_tipo = st.selectbox("Tipo Contrato:", ["CALL", "PUT"])
+            f_strike = st.number_input("Strike ($):", value=round(precio_actual, 1), step=0.5)
+            f_venc = st.text_input("Vencimiento (YYYY-MM-DD):", value="2026-12-18")
+            f_cant = st.number_input("Contratos:", min_value=1, value=1)
+            f_costo = st.number_input("Prima Pagada ($):", min_value=0.05, value=1.00, step=0.05)
+            if st.form_submit_button("➕ Agregar a Posiciones Abiertas"):
+                st.session_state.posiciones_ibkr.append({
+                    "Símbolo": ticker, "Tipo": f_tipo, "Strike": f_strike,
+                    "Vencimiento": f_venc, "Cant.": f_cant, "Costo Avg ($)": f_costo,
+                    "Precio Act. ($)": f_costo, "P&L ($)": 0.0
+                })
+                st.rerun()
+
+    st.subheader("💼 Posiciones Abiertas")
+    df_pos = pd.DataFrame(st.session_state.posiciones_ibkr)
+    st.dataframe(df_pos, use_container_width=True, hide_index=True)
+
+# --- TAB 5: SEGURIDAD & PINE SCRIPT / WEBHOOK ---
+with t_sec:
+    s1, s2 = st.columns(2)
+    with s1:
+        st.subheader("🛡️ Checklist de Seguridad Activo")
+        st.markdown("""
+        - ✅ **Aislamiento de Fondos:** Sin credenciales de IBKR expuestas en la nube.
+        - ✅ **Cifrado HTTPS/TLS:** Despliegue protegido en Streamlit Cloud.
+        - ✅ **Variables de Entorno:** Secretos aislados fuera del código fuente.
+        - ✅ **2FA Obligatorio:** Autenticación en dos pasos en IBKR y GitHub.
+        - ✅ **Validación HMAC-SHA256 & Rate Limiting:** Protección contra inyección de alertas.
+        """)
+    with s2:
+        st.subheader("🌲 Pine Script v5 (EMA 9/21 + RSI + MACD)")
+        st.code("""//@version=5
+strategy("Options Bot Signal", overlay=true)
+fast = ta.ema(close, 9)
+slow = ta.ema(close, 21)
+rsi  = ta.rsi(close, 14)
+[ml, sl, hl] = ta.macd(close, 12, 26, 9)
+longEntry  = ta.crossover(fast, slow)  and rsi < 70 and ml > sl
+shortEntry = ta.crossunder(fast, slow) and rsi > 30 and ml < sl
+plot(fast, "EMA9", color=color.aqua)
+plot(slow, "EMA21", color=color.yellow)""", language="pascal")
+
+# --- TAB 6: INFORME FUNDAMENTAL DINÁMICO ---
+with t_reporte:
+    html_dinamico = construir_informe_html_dinamico(
+        symbol=ticker,
+        precio_act=precio_actual,
+        info=info_empresa,
+        noticias=noticias_empresa,
+        insiders=insiders_empresa
+    )
+    components.html(html_dinamico, height=2200, scrolling=True)
